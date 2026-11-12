@@ -1,0 +1,5 @@
+scope,stratum,n_queries,denominator
+validation_selected,same_type_reverse_available,0,1726
+validation_selected,same_type_reverse_absent,1726,1726
+validation_selected,cross_type_not_applicable,200,1926
+train_diagnostics,same_type_nonself_reverse_fraction_all_relations_1,,

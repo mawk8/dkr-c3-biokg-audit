@@ -1,0 +1,28 @@
+{
+  "version": "biokg_global_lexicographic_v1",
+  "type_order": [
+    "disease",
+    "drug",
+    "function",
+    "protein",
+    "sideeffect"
+  ],
+  "type_sizes": [
+    10687,
+    10533,
+    45085,
+    17499,
+    9969
+  ],
+  "type_offsets": [
+    0,
+    10687,
+    21220,
+    66305,
+    83804
+  ],
+  "global_id_formula": "type_offsets[type_id] + local_id",
+  "n_entities": 93773,
+  "n_relations": 51,
+  "source": "docs/SPEC.md section 4; checked against raw num-node-dict when present"
+}

@@ -1,0 +1,24 @@
+{
+  "mode": "baselines",
+  "stage": "preliminary_validation_only",
+  "max_valid_per_relation": 20,
+  "validation_seed": 71,
+  "eval_batch_size": 64,
+  "candidate_chunk": 128,
+  "pilot_model": "head_blind",
+  "pilot_dim": 128,
+  "pilot_steps": 500,
+  "pilot_batch": 256,
+  "pilot_negatives": 64,
+  "pilot_seed": 101,
+  "pilot_lr": 0.001,
+  "pilot_max_minutes": 20,
+  "source_hashes": {
+    "__init__.py": "98e7fc2df87a9266d164dd0e7197e9dab51487a922015893f65614af7e08c1f7",
+    "data.py": "ea5c1b229e05f2f6afc7bd662c7273d473281874ffceee0cdefc9f1793923f30",
+    "baselines.py": "b502e82ff20186bbd64b4d685357a12147bcffcfac5214e152d50d96d83c657a",
+    "evaluate.py": "658fd74b5c70e715f7536a335b93d40ccccfb47c7e2dd5b2a403d2d87c371b88",
+    "training.py": "07ff2003e27ede98ca5ba84e1e9683dd531e3fc71e23cf08ee755dd09fe4430a",
+    "workflow.py": "8f548bae09175a2848499b24e54285fa4e1eae828980c2912df745bce69205db"
+  }
+}

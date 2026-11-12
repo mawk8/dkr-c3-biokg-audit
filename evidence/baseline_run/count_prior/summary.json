@@ -1,0 +1,19 @@
+{
+  "stage": "preliminary_validation",
+  "split": "valid",
+  "model": "count_prior",
+  "training_seed": null,
+  "n_triples": 963,
+  "n_queries": 1926,
+  "mrr": 0.4781561659052882,
+  "hits1": 0.32191069574247144,
+  "hits3": 0.5519210799584632,
+  "hits10": 0.8099688473520249,
+  "macro_relation_role_mrr": 0.4847807728792473,
+  "n_relation_role_cells": 102,
+  "official_negatives_per_direction": 500,
+  "validation_rows_sha256": "7b25e11ba519157c897e483d019aef61824fe4855ff42eb0ed1a9a3a0b4a8a66",
+  "candidate_sha256": "42e43c1a7c1d6bffc7f7a90ead9bcc0167493c29dafa98059a1f2c53e999af46",
+  "evaluation_seconds": 0.13947768499997437,
+  "note": "Stratified validation subset; no full test/matched/CI claims."
+}

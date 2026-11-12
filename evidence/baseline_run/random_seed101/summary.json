@@ -1,0 +1,19 @@
+{
+  "stage": "preliminary_validation",
+  "split": "valid",
+  "model": "random_seed101",
+  "training_seed": null,
+  "n_triples": 963,
+  "n_queries": 1926,
+  "mrr": 0.016582576826004985,
+  "hits1": 0.004672897196261682,
+  "hits3": 0.008826583592938734,
+  "hits10": 0.02284527518172378,
+  "macro_relation_role_mrr": 0.01611571844907082,
+  "n_relation_role_cells": 102,
+  "official_negatives_per_direction": 500,
+  "validation_rows_sha256": "7b25e11ba519157c897e483d019aef61824fe4855ff42eb0ed1a9a3a0b4a8a66",
+  "candidate_sha256": "42e43c1a7c1d6bffc7f7a90ead9bcc0167493c29dafa98059a1f2c53e999af46",
+  "evaluation_seconds": 0.16446648499982075,
+  "note": "Stratified validation subset; no full test/matched/CI claims."
+}

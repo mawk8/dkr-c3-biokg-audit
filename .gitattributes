@@ -1,0 +1,4 @@
+* text=auto eol=lf
+evidence/** -text
+*.ipynb -text
+*.npy -text

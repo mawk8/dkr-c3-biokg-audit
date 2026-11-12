@@ -1,0 +1,48 @@
+{
+  "snapshot_date": "2026-11-12",
+  "submission_language": "English",
+  "source_notebook_sha256": {
+    "pilot-solutuion-ipynb.ipynb": "c0bc047016959436b2916e8980f1cdd2ede35f9710307b9f0d5f9645ce82de45",
+    "pilot-complex-solutuion-ipynb.ipynb": "58e3cd43c74cd2218d089b936499fc4b5567ebfacc39d2f9abfde3f6e1636476",
+    "pilot-transe-solutuion-ipynb.ipynb": "8a2cb7b0e3fdd681f3dbf785190d28389ab2b211215738d9b655dcc78e8b74f2",
+    "testing-solutuio-ipynb.ipynb": "8109d1380bf6a81a2bcdb472762f822752b7fa9e48dc5bb8013b03312cebae8c"
+  },
+  "baseline_run": "20261112T122115_1794486075115976605_baselines_6dc8c4bb",
+  "learned_runs": [
+    {
+      "model": "head_blind",
+      "run_id": "20261112T123120_1794486680772089217_pilot_5c2dee4c",
+      "completed_steps": 500,
+      "seed": 101,
+      "best_step": 500,
+      "best_mrr": 0.3606058745745969,
+      "raw_export_received": false
+    },
+    {
+      "model": "complex",
+      "run_id": "20261112T131740_1794489460538454458_pilot_f010c73c",
+      "completed_steps": 500,
+      "seed": 101,
+      "best_step": 500,
+      "best_mrr": 0.015435258926342014,
+      "raw_export_received": false
+    },
+    {
+      "model": "transe",
+      "run_id": "20261112T132825_1794490105394765915_pilot_e1a6554c",
+      "completed_steps": 500,
+      "seed": 101,
+      "best_step": 500,
+      "best_mrr": 0.2407507513420916,
+      "raw_export_received": false
+    }
+  ],
+  "observation": "All pilot values were read from supplied executed notebooks; no training rerun during translation.",
+  "baseline_evidence": "Original per-query CSV and audit received; stored ranks and aggregate metrics verified.",
+  "pilot_evidence": "Original notebook outputs only; per-query candidate hashes, losses, timings, VRAM JSON and weights not received.",
+  "original_evidence_language": "Original Russian annotations and console text preserved without editing.",
+  "english_notebook_status": "Localized runnable edition, not executed after translation.",
+  "test_evaluated": false,
+  "matched_evaluated": false,
+  "training_seed_repeats_completed": false
+}

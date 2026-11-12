@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "rows_checked": 8,
+  "checks": [
+    "candidate_permutation",
+    "duplicate_id_consistency",
+    "count_endpoint_blindness"
+  ]
+}

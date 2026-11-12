@@ -1,0 +1,23 @@
+{
+  "stage": "preliminary_validation_only",
+  "status": "written_not_executed",
+  "dataset": "ogbl-biokg",
+  "loaded_splits": ["train", "valid"],
+  "default_mode": "prepare_only",
+  "validation_max_per_relation": 20,
+  "validation_seed": 71,
+  "eval_batch_size": 64,
+  "candidate_chunk": 128,
+  "official_negatives_per_direction": 500,
+  "pilot_model": "head_blind",
+  "pilot_real_dimension": 128,
+  "pilot_training_seed": 101,
+  "pilot_steps": 500,
+  "pilot_batch_size": 256,
+  "pilot_negatives": 64,
+  "pilot_learning_rate": 0.001,
+  "pilot_max_minutes": 20,
+  "run_final_test": false,
+  "run_matched_evaluation": false,
+  "run_training_seed_sweep": false
+}

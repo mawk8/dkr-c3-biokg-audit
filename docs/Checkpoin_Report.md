@@ -89,7 +89,7 @@ Same 963 triples / 1,926 queries; MRR with 95% cluster-bootstrap CIs
 | Count prior | 0.478 [0.457, 0.498] | 0.119 [0.108, 0.130] |
 | Global degree | 0.382 [0.363, 0.401] | 0.090 [0.080, 0.099] |
 
-![MRR by frequency stratum](results/quick/mrr_by_frequency.png)
+![MRR by frequency stratum](../results/quick/mrr_by_frequency.png)
 
 Findings:
 

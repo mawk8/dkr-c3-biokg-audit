@@ -11,4 +11,4 @@ scikit-learn==1.9.1
 matplotlib==3.11.2
 pytest==9.2.0
 # The earlier Kaggle GPU pilots (TransE/ComplEx/HeadBlind) ran on different versions;
-# see environment_observed.json. Those runs are not reproduced by this file.
+# Those runs are not reproduced by this file.

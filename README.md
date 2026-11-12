@@ -70,14 +70,14 @@ MRR with 95% cluster-bootstrap CIs (1,000 resamples over entity-pair clusters):
 - **Only 28% of queries are *popularity-matchable*.** For the most popular answers, too few equally popular wrong answers remain once known true triples are filtered out. On matchable queries the count prior scores 0.005 (chance). Matched results are therefore always reported split by this flag.
 - **H2, no reverse-edge leakage on this split.** None of the 1,726 same-type validation queries has its reverse triple in train, so reverse lookup adds nothing. The proposal's ~94% overlap expectation does not hold, and the effect is *not estimable*, which is different from a zero effect.
 
-Full discussion: [`docs/checkpoint-report.md`](docs/checkpoint-report.md).
+Full discussion: [`docs/Checkpoint_Report.md`](docs/Checkpoin_Report.md).
 
 ---
 
 ## 🚀 Quickstart: reproduce the main result
 
 ```bash
-git clone <this-repo-url> && cd dkr-c3-biokg-audit
+git clone https://github.com/mawk8/dkr-c3-biokg-audit.git && cd dkr-c3-biokg-audit
 python -m venv .venv && source .venv/bin/activate     # Python 3.14 verified
 pip install -r requirements.txt
 pytest -q tests                                        # 10 tests, ~10 s
@@ -171,7 +171,7 @@ Matched negatives exclude every known true triple from train, validation and tes
 - [ ] ComplEx diagnosis; TransE/HeadBlind at a common horizon × 3 seeds
 - [ ] Locked final test evaluation
 
-Open issues are tracked in [`docs/blockers.md`](docs/blockers.md).
+Open issues are tracked in [`docs/Blockers.md`](docs/Blockers.md).
 
 ---
 

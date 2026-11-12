@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from tqdm.auto import tqdm  # noqa: E402
 
 from biokg_audit.baselines import (CountPrior, GlobalDegreePrior, RandomScorer,  # noqa: E402
                                    ReverseLookup, prepare_statistics)
@@ -101,31 +102,32 @@ def main(argv=None):
 
     protocols = {"official": None}
     diagnostics = {}
-    for mode in ("nearest", "bin"):
+    for mode in tqdm(("nearest", "bin"), desc="matched protocols", unit="protocol"):
         t = time.perf_counter()
-        sets = build_matched_negatives(data, stats, rows, mode=mode, seed=a.neg_seed, test_keys=test_keys)
+        sets = build_matched_negatives(data, stats, rows, mode=mode, seed=a.neg_seed, test_keys=test_keys,
+                                       progress=True)
         name = sets["metadata"]["protocol"]
         protocols[name] = sets
         diagnostics[name] = sets["metadata"] | {
             k: sets["diagnostics"][k] for k in ("same_bin_fraction", "mean_abs_log_count_gap",
                                                 "frac_neg_count_ge_target")
         } | {"seconds": time.perf_counter() - t}
-        print(f"built {name} in {diagnostics[name]['seconds']:.0f}s", flush=True)
+        tqdm.write(f"built {name} in {diagnostics[name]['seconds']:.0f}s")
 
     scorers = {"random": RandomScorer(101), "count_prior": CountPrior(stats),
                "global_degree": GlobalDegreePrior(stats), "reverse_lookup": ReverseLookup(stats)}
     frames, summaries = {}, []
-    for protocol, sets in protocols.items():
-        for name, scorer in scorers.items():
-            res = evaluate_validation(scorer, data, stats, rows, run / protocol / name, model_name=name,
-                                      candidate_sets=sets, verbose=False)
-            frames[protocol, name] = pd.read_csv(run / protocol / name / "per_query.csv")
-            summaries.append(res)
-            print(f"{protocol:16s} {name:15s} MRR={res['mrr']:.4f} H@10={res['hits10']:.4f}", flush=True)
+    jobs = [(p, s, n, sc) for p, s in protocols.items() for n, sc in scorers.items()]
+    for protocol, sets, name, scorer in tqdm(jobs, desc="evaluating scorers", unit="run"):
+        res = evaluate_validation(scorer, data, stats, rows, run / protocol / name, model_name=name,
+                                  candidate_sets=sets, verbose=True)
+        frames[protocol, name] = pd.read_csv(run / protocol / name / "per_query.csv")
+        summaries.append(res)
+        tqdm.write(f"{protocol:16s} {name:15s} MRR={res['mrr']:.4f} H@10={res['hits10']:.4f}")
 
     kw = {"n_boot": a.n_boot, "seed": 0}
     ci = []
-    for (protocol, name), frame in frames.items():
+    for (protocol, name), frame in tqdm(frames.items(), desc="bootstrap CIs", unit="run"):
         for by in (None, "frequency_bin", "popularity_matchable", "direction"):
             part = summarize(frame, by=by, **kw)
             part.insert(0, "breakdown", by or "all")
@@ -152,7 +154,7 @@ def main(argv=None):
         ("count_prior - random (matched_nearest)", frames["matched_nearest", "count_prior"], frames["matched_nearest", "random"]),
     ]
     paired = []
-    for label, left, right in comparisons:
+    for label, left, right in tqdm(comparisons, desc="paired differences", unit="cmp"):
         for by in (None, "frequency_bin"):
             part = paired_difference(left, right, "rr", by=by, **kw)
             part.insert(0, "breakdown", by or "all")

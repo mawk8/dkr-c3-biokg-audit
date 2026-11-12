@@ -24,6 +24,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 from torch import nn
 from torch.nn import functional as F
 
@@ -350,7 +351,7 @@ def load_model_checkpoint(model: LearnedScorer, path: str | Path,
 
 def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConfig,
                 run_dir: Path, evaluate_fn: Callable[[LearnedScorer, int], Mapping[str, Any]] | None = None,
-                resume_path: str | Path | None = None) -> dict[str, Any]:
+                resume_path: str | Path | None = None, progress: bool = True) -> dict[str, Any]:
     """Train uniform typed batches and write immutable pilot artifacts.
 
     evaluate_fn(model, step) must use one fixed train-independent validation ID
@@ -484,6 +485,7 @@ def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConf
         log({"event": "resume" if checkpoint is not None else "start", "step": step,
              "runtime_config": asdict(config)})
         model.train()
+        bar = tqdm(total=config.steps, initial=step, desc="train", unit="step", disable=not progress)
         while step < config.steps:
             if time.perf_counter() - started >= config.max_minutes * 60:
                 stop_reason = "wall_time_cap"
@@ -506,12 +508,14 @@ def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConf
             _sync(model)
             timings.append(time.perf_counter() - began)
             step = next_step
+            bar.update(1)
             if len(batch_hashes) < 10:
                 batch_hashes.append({"step": step, "sha256": fingerprint, "direction": query["direction"]})
                 log({"event": "batch_fingerprint", **batch_hashes[-1]})
             if step % config.log_every == 0 or step == 1 or step == config.steps:
                 log({"event": "update", "step": step, "loss": float(loss.detach().cpu()),
                      "step_seconds": timings[-1]})
+                bar.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}", refresh=False)
             if evaluate_fn is not None and (step % config.validation_every == 0 or step == config.steps):
                 model.eval()
                 try:
@@ -531,6 +535,7 @@ def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConf
                     save("best")
             if step % config.checkpoint_every == 0:
                 save("last")
+        bar.close()
         # Keep the current snapshot even if the wall-time cap interrupted the pilot.
         save("last")
         elapsed = time.perf_counter() - started

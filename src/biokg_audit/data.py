@@ -22,6 +22,7 @@ import uuid
 import zipfile
 
 import numpy as np
+from tqdm.auto import tqdm
 
 
 TYPE_NAMES = ("disease", "drug", "function", "protein", "sideeffect")
@@ -127,18 +128,17 @@ def _download_public(data_dir: Path) -> Path:
             print(f"Archive size: {expected_bytes / 2**30:.2f} GiB", flush=True)
             if shutil.disk_usage(target_dir).free < expected_bytes + 4 * 2**30:
                 raise OSError("Not enough free disk for archive, train/valid files and cache; need archive size plus 4 GiB reserve")
-        with partial.open("xb") as stream:
+        with partial.open("xb") as stream, tqdm(
+                total=expected_bytes or None, unit="B", unit_scale=True, unit_divisor=1024,
+                desc="Downloading biokg.zip") as bar:
             downloaded = 0
-            next_progress = 128 * 1024 * 1024
             while True:
                 block = response.read(8 * 1024 * 1024)
                 if not block:
                     break
                 stream.write(block)
                 downloaded += len(block)
-                if downloaded >= next_progress:
-                    print(f"Downloaded {downloaded / 2**30:.2f} GiB", flush=True)
-                    next_progress += 128 * 1024 * 1024
+                bar.update(len(block))
             if expected_bytes and downloaded != expected_bytes:
                 raise OSError("Download length mismatch; partial file retained, no extraction performed")
     if archive.exists():
@@ -153,7 +153,7 @@ def _download_public(data_dir: Path) -> Path:
     required = {"biokg/split/random/train.pt", "biokg/split/random/valid.pt"}
     seen = set()
     with zipfile.ZipFile(archive) as bundle:
-        for member in bundle.infolist():
+        for member in tqdm(bundle.infolist(), desc="Validating ZIP members", unit="file"):
             # Validate every archive path even though only allowlisted files
             # are extracted. No ZIP-controlled path is passed to extractall.
             pure = PurePosixPath(member.filename)
@@ -261,7 +261,7 @@ def _prepare_split(root: Path, cache: Path, split: str, source_hash: str) -> dic
         _integer(f"{split}.{name}", original, (n_rows,), 0, upper)
         dtype = np.uint16 if types is None else np.uint32
         result = _npy_new(folder / f"{name}.npy", dtype, (n_rows,))
-        for begin in range(0, n_rows, CHUNK_ROWS):
+        for begin in tqdm(range(0, n_rows, CHUNK_ROWS), desc=f"{split}.{name}", unit="chunk", leave=False):
             end = min(n_rows, begin + CHUNK_ROWS)
             block = original[begin:end].astype(np.int64)
             if types is not None:
@@ -287,7 +287,7 @@ def _prepare_split(root: Path, cache: Path, split: str, source_hash: str) -> dic
             if original.shape != (n_rows, 500) or original.dtype.kind not in "iu":
                 raise ValueError(f"{split}.{name}: expected integer [{n_rows},500]")
             result = _npy_new(folder / f"{name}.npy", np.uint32, original.shape)
-            for begin in range(0, n_rows, CHUNK_ROWS):
+            for begin in tqdm(range(0, n_rows, CHUNK_ROWS), desc=f"{split}.{name}", unit="chunk", leave=False):
                 end = min(n_rows, begin + CHUNK_ROWS)
                 block = original[begin:end]
                 bounds = TYPE_SIZES[types[begin:end], None]

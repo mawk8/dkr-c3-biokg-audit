@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from .baselines import classify_frequency
 from .data import contains_keys, triple_keys
@@ -157,7 +158,7 @@ class MatchedSampler:
 
 def build_matched_negatives(data: dict, stats: dict, rows: np.ndarray, mode: str = "nearest",
                             k: int = 500, seed: int = 2024,
-                            test_keys: np.ndarray | None = None) -> dict:
+                            test_keys: np.ndarray | None = None, progress: bool = False) -> dict:
     """Return {'head_neg','tail_neg': int64[len(rows),k], diagnostics, metadata}.
 
     Arrays are aligned with ``rows`` (row position, not row ID).
@@ -170,7 +171,8 @@ def build_matched_negatives(data: dict, stats: dict, rows: np.ndarray, mode: str
     same_bin = np.empty((2, len(rows)), dtype=np.int64)
     gap = np.empty((2, len(rows)), dtype=np.float64)
     balance = np.empty((2, len(rows)), dtype=np.float64)
-    for i, row in enumerate(rows):
+    for i, row in enumerate(tqdm(rows, desc=f"matched_{mode} negatives", unit="triple",
+                                 disable=not progress)):
         h, r, t = int(split["head"][row]), int(split["relation"][row]), int(split["tail"][row])
         for direction, fixed, target, key in ((0, t, h, "head_neg"), (1, h, t, "tail_neg")):
             cand, info = sampler.sample_one(int(row), direction, r, fixed, target)

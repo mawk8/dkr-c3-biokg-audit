@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from .baselines import classify_frequency, reverse_available
 
@@ -207,7 +208,9 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
         for direction in (0, 1):
             target_key, fixed_key = ('head', 'tail') if direction == 0 else ('tail', 'head')
             negative_key = 'head_neg' if direction == 0 else 'tail_neg'
-            for begin in range(0, len(rows), batch_size):
+            batches = tqdm(range(0, len(rows), batch_size), disable=not verbose, leave=False, unit="batch",
+                           desc=f"{model_name} [{protocol}] {'head' if direction == 0 else 'tail'} queries")
+            for begin in batches:
                 selected = rows[begin:begin+batch_size]
                 negatives_all = np.asarray(negative_source[negative_key](selected, slice(begin, begin+len(selected))),
                                            dtype=np.int64)
@@ -278,8 +281,6 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                         strata.append('reverse:not_applicable')
                     for stratum in strata:
                         aggregates[stratum].add(row)
-                if verbose and (begin == 0 or begin+batch_size >= len(rows)):
-                    print(f'{model_name}: {query["direction"]} / {min(begin+batch_size,len(rows))}/{len(rows)} triples')
     finally:
         if query_handle:
             query_handle.close()

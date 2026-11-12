@@ -418,6 +418,40 @@ def load_data(workspace: Path, input_dir: Path | None = None, download: bool = F
             "mapping": _mapping(), "manifest": manifest, "cache_dir": cache}
 
 
+def load_test_positive_keys(data: dict, archive: Path | None = None) -> np.ndarray:
+    """Sorted uint64 keys of TEST positives, for the filtered-negative mask ONLY.
+
+    Reads head/relation/tail of split/random/test.pt from the retained official
+    ZIP. Test negatives are never read and test triples are never scored. The
+    keys are cached next to the train/valid cache as test_positive_keys.npy.
+    """
+    import io
+    import torch
+
+    cache = Path(data["cache_dir"])
+    cached = cache / "test_positive_keys.npy"
+    if cached.is_file():
+        return np.load(cached, allow_pickle=False)
+    if archive is None:
+        data_dir = cache.parent
+        selection = json.loads((data_dir / "public_source.json").read_text(encoding="utf-8"))
+        archive = data_dir.joinpath(*PurePosixPath(selection["relative_root"]).parts).parent / "biokg.zip"
+    with zipfile.ZipFile(_no_links(Path(archive))) as bundle:
+        raw = torch.load(io.BytesIO(bundle.read("biokg/split/random/test.pt")),
+                         weights_only=False, map_location="cpu")
+    n_rows = len(_as_array(raw["head"]))
+    head_type = _type_ids("test.head_type", raw["head_type"], n_rows).astype(np.int64)
+    tail_type = _type_ids("test.tail_type", raw["tail_type"], n_rows).astype(np.int64)
+    heads = _as_array(raw["head"]).astype(np.int64) + TYPE_OFFSETS[head_type]
+    tails = _as_array(raw["tail"]).astype(np.int64) + TYPE_OFFSETS[tail_type]
+    if np.any(heads - TYPE_OFFSETS[head_type] >= TYPE_SIZES[head_type]) or np.any(tails - TYPE_OFFSETS[tail_type] >= TYPE_SIZES[tail_type]):
+        raise ValueError("test endpoint ID outside its type range")
+    keys = np.unique(triple_keys(heads, _as_array(raw["relation"]).astype(np.int64), tails))
+    del raw
+    np.save(cached, keys, allow_pickle=False)
+    return keys
+
+
 def triple_keys(heads, relations, tails, n_entities: int = N_ENTITIES, n_relations: int = N_RELATIONS) -> np.ndarray:
     """Collision-free uint64 key, after callers have checked index ranges."""
     if n_entities * n_relations * n_entities - 1 > np.iinfo(np.uint64).max:

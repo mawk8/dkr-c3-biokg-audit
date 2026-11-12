@@ -133,6 +133,24 @@ class CountPrior:
         return self.stats["counts"][relations[:, None], direction, candidates]
 
 
+class GlobalDegreePrior:
+    """Total TRAIN degree of the candidate over ALL relations and roles.
+
+    Unlike CountPrior it ignores the queried relation, so frequency-matched
+    negatives (matched on the relation/role count) do not neutralise it by
+    construction. It tests whether generic hub-ness survives matching.
+    """
+
+    def __init__(self, stats: dict):
+        self.stats = stats
+        self.degree = stats["counts"].sum(axis=(0, 1), dtype=np.int64)
+
+    def score_candidates(self, query: dict, candidates: np.ndarray) -> np.ndarray:
+        direction, _, relations, fixed, types, candidates = _query(query, candidates)
+        _typed_candidates(self.stats, direction, relations, fixed, types, candidates)
+        return self.degree[candidates]
+
+
 class ReverseLookup:
     """TRAIN reverse indicator + bounded count score; float64, no labels."""
 

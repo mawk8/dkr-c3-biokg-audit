@@ -8,6 +8,12 @@ How much performance on ogbl-biokg can be obtained from candidate frequency or
 explicit reverse-edge lookup, and what do learned endpoint-dependent scorers add?
 The project audits evaluation behaviour; it does not validate medical claims.
 
+**Success measure.** A scorer captures structure beyond popularity if its MRR
+advantage over the count prior under *frequency-matched* negatives has a 95%
+cluster-bootstrap CI that excludes zero, overall and in the mid/low frequency
+strata. The count prior's own drop under matching is a sanity check, not a
+result: the matching is built on the same train counts.
+
 ## Data and protocol
 
 The official train split contains 4,762,678 directed triples. Validation contains
@@ -28,10 +34,13 @@ train/test overlap checks remain unverified.
 |---|---:|---:|---:|---:|
 | Random | not trained | 101 | 0.016583 | 0.022845 |
 | Count prior | not trained | n/a | 0.478156 | 0.809969 |
-| Reverse lookup + count | not trained | n/a | 0.478156 | 0.809969 |
 | HeadBlind | 500 | 101 | 0.360606 | 0.684320 |
 | TransE | 500 | 101 | 0.240751 | 0.582035 |
 | ComplEx | 500 | 101 | 0.015435 | 0.026999 |
+
+Reverse lookup + count is omitted from the table: it gives identical ranks
+to the count prior on every query, because no validation query has its
+reverse triple in train (see the reverse-edge audit below).
 
 Learned models use 128 real scalars per entity, batch 256, 64 typed training
 negatives, Adam and learning rate 0.001. ComplEx therefore has complex rank 64.
@@ -56,6 +65,50 @@ checkpoint metadata; displayed Hits values are rounded to six decimals.
 Shared pilot selection settings are recorded, but cross-run per-query identity
 has not yet been independently verified from learned-run CSV.
 
+## Official versus frequency-matched evaluation
+
+Reproduce with `python scripts/run_audit.py --download` (about 1 minute after
+the one-time download). Tables and figure are in `results/quick/`.
+
+For every query we replace the 500 official negatives (uniform over the target
+type) with 500 negatives of the same type whose train frequency in the same
+relation/role is as close as possible to the true answer's: a window centred on
+the positive's count rank, half less and half more popular where possible
+(`matched_nearest`). Negatives are filtered against all known positives: train,
+full validation, and test head/relation/tail (test is used only as this mask;
+test triples are never scored). `matched_bin` (same zero/low/mid/high bin) is an
+ablation. A global-degree prior (degree over all relations) is added because
+the matching does not control it.
+
+Same 963 triples / 1,926 queries; MRR with 95% cluster-bootstrap CIs
+(1,000 resamples over entity-pair clusters):
+
+| Scorer | Official | Matched (nearest) |
+|---|---:|---:|
+| Random | 0.017 [0.014, 0.021] | 0.017 [0.014, 0.021] |
+| Count prior | 0.478 [0.457, 0.498] | 0.119 [0.108, 0.130] |
+| Global degree | 0.382 [0.363, 0.401] | 0.090 [0.080, 0.099] |
+
+![MRR by frequency stratum](results/quick/mrr_by_frequency.png)
+
+Findings:
+
+- Under matching, the count prior is at chance for mid and low frequency
+  answers (count prior - random: mid -0.001 [-0.007, 0.005], low 0.000
+  [-0.002, 0.002]).
+- Its remaining 0.119 comes almost entirely from the high stratum. Only 545 of
+  1,926 queries (28%) are *popularity-matchable*, meaning at least 25% of
+  negatives are as popular as the positive. For the rest, the most popular true
+  answers have too few more-popular entities left once known positives are
+  filtered out. On matchable queries the count prior scores 0.005 (chance).
+  Every matched result is therefore reported split by this flag.
+- Global degree ranks below the count prior under both protocols. It beats the
+  count prior only for the 25 zero-frequency answers (+0.153 [0.062, 0.285]),
+  a small cell.
+- These baselines set the bar for learned models. On the official protocol the
+  bar is 0.478. On matched negatives it is 0.119 overall and about 0.005 on
+  matchable queries.
+
 ## Reverse-edge audit: correction to the proposal
 
 All 1,726 sampled same-type validation queries had no reverse triple in train;
@@ -78,9 +131,11 @@ pilots are available. First inspect learning/loss diagnostics and measured
 resources, choose a common horizon, then run seeds 101/202/303 under that recipe.
 Longer KGE runs must not be compared with HeadBlind after 500 updates as an equal-budget result.
 
-Matched negatives, coverage/balance diagnostics, H3, bootstrap intervals, locked
-final-test evaluation and fresh-cloud reproduction remain to be implemented or
-verified. The final report and reproducible main experiment are due 3 December.
+Matched negatives, balance diagnostics and cluster-bootstrap intervals are now
+implemented for the non-learned ladder (above). Remaining: run the full
+validation split (`--preset full`); evaluate HeadBlind/TransE/ComplEx under
+matched negatives, which needs exported checkpoints; H3; and the locked
+final-test evaluation. The final report and reproducible main experiment are due 3 December.
 No claim of statistical significance or clinical usefulness is made here.
 
 ## Project contribution and AI use

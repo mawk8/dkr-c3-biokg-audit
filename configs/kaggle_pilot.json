@@ -1,6 +1,6 @@
 {
   "stage": "preliminary_validation_only",
-  "status": "written_not_executed",
+  "status": "executed_via_original_notebooks_seed101_500_updates",
   "dataset": "ogbl-biokg",
   "loaded_splits": ["train", "valid"],
   "default_mode": "prepare_only",

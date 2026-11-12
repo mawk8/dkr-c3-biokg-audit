@@ -1,9 +1,14 @@
-# Versions observed in the completed Kaggle checkpoint runs.
-# Fresh-environment reproduction has not yet been verified.
-# Keep Kaggle's preinstalled CUDA-enabled Torch; do not reinstall it there.
-# The CUDA build suffix is recorded in environment_observed.json.
-torch==2.11.0
-numpy==2.1.3
-ogb==1.3.6
+# Pinned, verified environment for the CPU audit pipeline (scripts/run_audit.py, tests/).
+# Verified by a fresh-clone install on Python 3.14 (Linux x86_64), 2026-11-12.
+# Install: pip install -r requirements.txt   (or: uv pip install -r requirements.txt)
+# CPU torch wheel index (torch is used only to unpickle the OGB .pt splits and for the metric gate):
+--extra-index-url https://download.pytorch.org/whl/cpu
+numpy==2.5.4
 pandas==2.3.3
-scikit-learn==1.6.1
+torch==2.15.0
+ogb==1.3.6
+scikit-learn==1.9.1
+matplotlib==3.11.2
+pytest==9.2.0
+# The earlier Kaggle GPU pilots (TransE/ComplEx/HeadBlind) ran on different versions;
+# see environment_observed.json. Those runs are not reproduced by this file.

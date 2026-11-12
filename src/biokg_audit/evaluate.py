@@ -15,6 +15,11 @@ import numpy as np
 
 from .baselines import classify_frequency, reverse_available
 
+# A query is "popularity-matchable" when at least this share of its negatives
+# is at least as frequent (train, same relation/role) as the positive. Below it,
+# a pure popularity scorer still out-ranks most negatives by construction.
+MATCHABLE_THRESHOLD = 0.25
+
 
 def select_validation_rows(data: dict, max_per_relation: int | None = 20,
                            seed: int = 71) -> np.ndarray:
@@ -152,11 +157,14 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                         output_dir: Path | None = None, model_name: str = 'scorer',
                         training_seed: int | None = None, batch_size: int = 64,
                         candidate_chunk: int = 128, save_queries: bool = True,
-                        verbose: bool = True) -> dict:
+                        verbose: bool = True, candidate_sets: dict | None = None) -> dict:
     """Two queries per selected valid row, all 500 official negatives each.
 
     score_candidates never receives the positive target or diagnostic labels.
     Only chunks enter the GPU. There is deliberately no test argument.
+
+    ``candidate_sets`` (from ``matched.build_matched_negatives``) replaces the
+    official negatives with arrays aligned to ``rows`` positions.
     """
     if batch_size < 1 or candidate_chunk < 1:
         raise ValueError('Batch and chunk must be positive')
@@ -166,8 +174,17 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
         raise ValueError('Need nonempty unique validation row IDs')
     if rows.min() < 0 or rows.max() >= len(split['head']):
         raise ValueError('Validation row ID out of range')
-    if split['head_neg'].shape[1] != 500 or split['tail_neg'].shape[1] != 500:
-        raise ValueError('Official evaluation requires 500 negatives per side')
+    if candidate_sets is None:
+        if split['head_neg'].shape[1] != 500 or split['tail_neg'].shape[1] != 500:
+            raise ValueError('Official evaluation requires 500 negatives per side')
+        protocol = 'official'
+        negative_source = {k: (lambda sel, pos, a=split[k]: a[sel]) for k in ('head_neg', 'tail_neg')}
+    else:
+        if any(candidate_sets[k].shape[0] != len(rows) for k in ('head_neg', 'tail_neg')):
+            raise ValueError('candidate_sets must be aligned with rows')
+        protocol = candidate_sets['metadata']['protocol']
+        negative_source = {k: (lambda sel, pos, a=candidate_sets[k]: a[pos]) for k in ('head_neg', 'tail_neg')}
+    n_negative = int((candidate_sets or split)['head_neg'].shape[1])
     aggregates = defaultdict(_Aggregate)
     candidate_hash = hashlib.sha256()
     start = time.perf_counter()
@@ -175,7 +192,8 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
     writer = None
     columns = ['split', 'row_id', 'direction', 'relation', 'model', 'training_seed',
                'head_global', 'tail_global', 'fixed_global', 'target_global',
-               'target_type', 'frequency_count', 'frequency_bin', 'inverse_applicable',
+               'target_type', 'protocol', 'frequency_count', 'frequency_bin',
+               'neg_count_ge_frac', 'popularity_matchable', 'inverse_applicable',
                'inverse_available', 'self_loop', 'cluster_id', 'n_negative',
                'n_greater', 'n_equal', 'rank', 'rr', 'hits1', 'hits3', 'hits10']
     if output_dir is not None:
@@ -191,6 +209,8 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
             negative_key = 'head_neg' if direction == 0 else 'tail_neg'
             for begin in range(0, len(rows), batch_size):
                 selected = rows[begin:begin+batch_size]
+                negatives_all = np.asarray(negative_source[negative_key](selected, slice(begin, begin+len(selected))),
+                                           dtype=np.int64)
                 relation = np.asarray(split['relation'][selected], dtype=np.int64)
                 head = np.asarray(split['head'][selected], dtype=np.int64)
                 tail = np.asarray(split['tail'][selected], dtype=np.int64)
@@ -202,18 +222,20 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                 positive = np.asarray(scorer.score_candidates(query, targets[:, None]))[:, 0]
                 if not np.isfinite(positive).all():
                     raise ValueError('Non-finite positive score')
+                target_counts = np.asarray(stats['counts'][relation, direction, targets])
+                negative_counts = np.asarray(stats['counts'][relation[:, None], direction, negatives_all])
+                balance = (negative_counts >= target_counts[:, None]).mean(axis=1)
                 greater = np.zeros(len(selected), dtype=np.int64)
                 equal = np.zeros(len(selected), dtype=np.int64)
                 # Canonical row-major serialization, independent of B/K chunks.
-                hash_negatives = np.asarray(split[negative_key][selected], dtype='<i8')
+                hash_negatives = negatives_all.astype('<i8')
                 for j, row_id in enumerate(selected):
                     identity = np.array([row_id, direction, relation[j], fixed[j],
                                          targets[j]], dtype='<i8')
                     candidate_hash.update(identity.tobytes())
                     candidate_hash.update(hash_negatives[j].tobytes())
-                for offset in range(0, 500, candidate_chunk):
-                    candidates = np.asarray(split[negative_key][selected, offset:offset+candidate_chunk],
-                                            dtype=np.int64)
+                for offset in range(0, n_negative, candidate_chunk):
+                    candidates = negatives_all[:, offset:offset+candidate_chunk]
                     scores = np.asarray(scorer.score_candidates(query, candidates))
                     if scores.shape != candidates.shape or not np.isfinite(scores).all():
                         raise ValueError('Invalid negative score array')
@@ -229,11 +251,13 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                     row = dict(split='valid', row_id=int(row_id), direction='head' if direction == 0 else 'tail',
                                relation=r, model=model_name, training_seed=training_seed,
                                head_global=h, tail_global=t, fixed_global=int(fixed[j]),
-                               target_global=int(targets[j]), target_type=int(types[j]),
+                               target_global=int(targets[j]), target_type=int(types[j]), protocol=protocol,
                                frequency_count=int(frequency[j]), frequency_bin=str(frequency_bins[j]),
+                               neg_count_ge_frac=float(balance[j]),
+                               popularity_matchable=bool(balance[j] >= MATCHABLE_THRESHOLD),
                                inverse_applicable=bool(applicable[j]),
                                inverse_available=bool(inverse[j]) if applicable[j] else None,
-                               self_loop=h==t, cluster_id=cluster, n_negative=500,
+                               self_loop=h==t, cluster_id=cluster, n_negative=n_negative,
                                n_greater=int(greater[j]), n_equal=int(equal[j]),
                                rank=float(metrics['rank'][j]), rr=float(metrics['rr'][j]),
                                hits1=int(metrics['hits1'][j]), hits3=int(metrics['hits3'][j]),
@@ -243,6 +267,8 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                     strata = ['all', f"direction:{row['direction']}",
                               f"relation:{r}:{row['direction']}",
                               f"frequency:{row['frequency_bin']}",
+                              f"matchable:{row['popularity_matchable']}",
+                              f"frequency_matchable:{row['frequency_bin']}:{row['popularity_matchable']}",
                               f"relation_frequency:{r}:{row['direction']}:{row['frequency_bin']}"]
                     if applicable[j]:
                         strata.append(f'reverse:{bool(inverse[j])}')
@@ -260,16 +286,16 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
     records = [value.record(key) for key, value in sorted(aggregates.items())]
     overall = aggregates['all'].record('all')
     relation_means = [x['mrr'] for x in records if x['stratum'].startswith('relation:')]
-    result = dict(stage='preliminary_validation', split='valid', model=model_name,
+    result = dict(stage='preliminary_validation', split='valid', model=model_name, protocol=protocol,
                   training_seed=training_seed, n_triples=len(rows), n_queries=2*len(rows),
                   mrr=overall['mrr'], hits1=overall['hits1'], hits3=overall['hits3'],
                   hits10=overall['hits10'], macro_relation_role_mrr=float(np.mean(relation_means)),
                   n_relation_role_cells=len(relation_means),
-                  official_negatives_per_direction=500,
+                  negatives_per_direction=n_negative,
                   validation_rows_sha256=hashlib.sha256(rows.astype('<i8').tobytes()).hexdigest(),
                   candidate_sha256=candidate_hash.hexdigest(),
                   evaluation_seconds=time.perf_counter()-start,
-                  note='Stratified validation subset; no full test/matched/CI claims.')
+                  note='Validation only; no test/CI claims.')
     if output_dir is not None:
         (output_dir/'summary.json').write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')
         with (output_dir/'strata.csv').open('x', encoding='utf-8', newline='') as handle:

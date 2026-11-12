@@ -59,7 +59,7 @@ def write_comparison(run_dir: Path, results: list[dict]) -> Path:
     if len(row_hashes) != 1 or len(candidate_hashes) != 1:
         raise ValueError('Scorers used different questions or candidates')
     path = Path(run_dir)/f'comparison_{time.time_ns()}.csv'
-    columns = ['model', 'training_seed', 'n_triples', 'n_queries', 'mrr',
+    columns = ['model', 'protocol', 'training_seed', 'n_triples', 'n_queries', 'mrr',
                'hits1', 'hits3', 'hits10', 'macro_relation_role_mrr',
                'evaluation_seconds', 'stage', 'split']
     with path.open('x', encoding='utf-8', newline='') as handle:

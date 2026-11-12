@@ -24,7 +24,9 @@ is provided in English in the report and runnable notebook.
 
 Raw dataset files, model weights and export ZIPs are excluded. Observed package
 versions are recorded in environment_observed.json, not offered as a blindly
-installable environment lock. Fresh-cloud reproduction remains unverified.
+installable environment lock. `requirements.txt` lists the observed package
+versions for reference; keep Kaggle's preinstalled CUDA-enabled Torch rather
+than reinstalling it. Fresh-cloud reproduction remains unverified.
 
 Metric validation uses the official OGB 1.3.6 CPU Torch branch; NumPy-branch
 compatibility in the user's installed build failed and was not silently skipped.

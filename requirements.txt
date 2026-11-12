@@ -1,0 +1,9 @@
+# Versions observed in the completed Kaggle checkpoint runs.
+# Fresh-environment reproduction has not yet been verified.
+# Keep Kaggle's preinstalled CUDA-enabled Torch; do not reinstall it there.
+# The CUDA build suffix is recorded in environment_observed.json.
+torch==2.11.0
+numpy==2.1.3
+ogb==1.3.6
+pandas==2.3.3
+scikit-learn==1.6.1

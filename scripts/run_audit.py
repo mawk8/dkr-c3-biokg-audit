@@ -2,6 +2,7 @@
 
     python scripts/run_audit.py --download                 # quick: 20 valid triples/relation
     python scripts/run_audit.py --preset full              # all 162,886 valid triples
+    python scripts/run_audit.py --checkpoint scoring.pt   # add a saved learned scorer
 
 Steps: load/cached ogbl-biokg (train+valid; test positives only as a negative
 filter mask) -> train-only statistics -> reverse-edge audit -> evaluate the
@@ -27,7 +28,7 @@ from tqdm.auto import tqdm  # noqa: E402
 
 from biokg_audit.baselines import (CountPrior, GlobalDegreePrior, RandomScorer,  # noqa: E402
                                    ReverseLookup, prepare_statistics)
-from biokg_audit.data import load_data, load_test_positive_keys  # noqa: E402
+from biokg_audit.data import _no_links, _sha256, load_data, load_test_positive_keys  # noqa: E402
 from biokg_audit.evaluate import (MATCHABLE_THRESHOLD, evaluate_validation,  # noqa: E402
                                   metric_gates, select_validation_rows)
 from biokg_audit.matched import build_matched_negatives  # noqa: E402
@@ -48,7 +49,10 @@ def parse(argv=None):
     p.add_argument("--neg-seed", type=int, default=2024)
     p.add_argument("--n-boot", type=int, default=1000)
     p.add_argument("--no-test-filter", action="store_true", help="ablation: do not mask test positives")
-    p.add_argument("--out", type=Path, help="default: results/<preset>")
+    p.add_argument("--checkpoint", action="append", type=Path, default=[],
+                   help="scoring export to evaluate on validation; repeat for multiple snapshots")
+    p.add_argument("--device", default="cpu", help="learned scoring device, such as cpu or cuda:0")
+    p.add_argument("--out", type=Path, help="default: results/<preset>, or a fresh run for checkpoints")
     return p.parse_args(argv)
 
 
@@ -84,22 +88,26 @@ def figure(ci: pd.DataFrame, path: Path) -> None:
 
 def main(argv=None):
     a = parse(argv)
-    out = a.out or ROOT / "results" / a.preset
-    out.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
 
     data = load_data(a.workspace, a.input_dir, a.download)
     gates = metric_gates()
     stats = prepare_statistics(data)
-    test_keys = None if a.no_test_filter else load_test_positive_keys(data)
     rows = select_validation_rows(data, PRESETS[a.preset], a.row_seed)
     config = {k: str(v) for k, v in vars(a).items()} | {"n_rows": int(len(rows))}
     run = new_run(a.workspace, config, f"audit_{a.preset}")
+    out = a.out or (run / "tables" if a.checkpoint else ROOT / "results" / a.preset)
+    out.mkdir(parents=True, exist_ok=not a.checkpoint)
+    with (run / "validation_rows.npy").open("xb") as handle:
+        np.save(handle, rows, allow_pickle=False)
     print(f"[{a.preset}] {len(rows)} valid triples, {2 * len(rows)} queries -> {run}", flush=True)
 
     reverse = pd.DataFrame(stats["reverse_diagnostics"])
     reverse.to_csv(out / "reverse_audit_train.csv", index=False)
 
+    # Test keys are confined to the candidate builder. No model sees these keys.
+    test_keys = None if a.no_test_filter else load_test_positive_keys(data)
+    test_positive_mask = test_keys is not None
     protocols = {"official": None}
     diagnostics = {}
     for mode in tqdm(("nearest", "bin"), desc="matched protocols", unit="protocol"):
@@ -113,14 +121,38 @@ def main(argv=None):
                                                 "frac_neg_count_ge_target")
         } | {"seconds": time.perf_counter() - t}
         tqdm.write(f"built {name} in {diagnostics[name]['seconds']:.0f}s")
+    del test_keys
 
     scorers = {"random": RandomScorer(101), "count_prior": CountPrior(stats),
                "global_degree": GlobalDegreePrior(stats), "reverse_lookup": ReverseLookup(stats)}
+    checkpoints = {}
+    if a.checkpoint:
+        from biokg_audit.training import restore_scoring_checkpoint
+
+        for path in a.checkpoint:
+            path = _no_links(path)
+            scorer, metadata = restore_scoring_checkpoint(path, data, device=a.device)
+            stem = f"{scorer.model_name}_seed{scorer.seed}_step{metadata['step']}_{metadata['kind']}"
+            name = stem
+            suffix = 2
+            while name in scorers:
+                name = f"{stem}_{suffix}"
+                suffix += 1
+            scorers[name] = scorer
+            checkpoints[name] = metadata | {
+                "file": path.name, "file_sha256": _sha256(path),
+                "scoring_device": str(scorer.device),
+            }
     frames, summaries = {}, []
+    fingerprints = {}
     jobs = [(p, s, n, sc) for p, s in protocols.items() for n, sc in scorers.items()]
     for protocol, sets, name, scorer in tqdm(jobs, desc="evaluating scorers", unit="run"):
         res = evaluate_validation(scorer, data, stats, rows, run / protocol / name, model_name=name,
-                                  candidate_sets=sets, verbose=True)
+                                  training_seed=checkpoints[name]["model_config"]["seed"]
+                                  if name in checkpoints else None, candidate_sets=sets, verbose=True)
+        fingerprint = (res["validation_rows_sha256"], res["candidate_sha256"])
+        if fingerprint != fingerprints.setdefault(protocol, fingerprint):
+            raise ValueError(f"Scorers used different validation rows or candidates under {protocol}")
         frames[protocol, name] = pd.read_csv(run / protocol / name / "per_query.csv")
         summaries.append(res)
         tqdm.write(f"{protocol:16s} {name:15s} MRR={res['mrr']:.4f} H@10={res['hits10']:.4f}")
@@ -153,6 +185,13 @@ def main(argv=None):
         ("reverse_lookup - count_prior (official)", frames["official", "reverse_lookup"], frames["official", "count_prior"]),
         ("count_prior - random (matched_nearest)", frames["matched_nearest", "count_prior"], frames["matched_nearest", "random"]),
     ]
+    for name in checkpoints:
+        for protocol in protocols:
+            for baseline in ("count_prior", "reverse_lookup"):
+                comparisons.append((f"{name} - {baseline} ({protocol})",
+                                    frames[protocol, name], frames[protocol, baseline]))
+        comparisons.append((f"{name}: matched_nearest - official",
+                            frames["matched_nearest", name], frames["official", name]))
     paired = []
     for label, left, right in tqdm(comparisons, desc="paired differences", unit="cmp"):
         for by in (None, "frequency_bin"):
@@ -166,7 +205,8 @@ def main(argv=None):
     save_json_over(out / "run_info.json", {
         "preset": a.preset, "n_valid_triples": int(len(rows)), "n_queries": int(2 * len(rows)),
         "row_seed": a.row_seed, "neg_seed": a.neg_seed, "n_boot": a.n_boot,
-        "matchable_threshold": MATCHABLE_THRESHOLD, "test_positive_mask": test_keys is not None,
+        "matchable_threshold": MATCHABLE_THRESHOLD, "test_positive_mask": test_positive_mask,
+        "checkpoints": checkpoints,
         "negative_diagnostics": diagnostics, "metric_gates": gates,
         "candidate_sha256": {f"{s['protocol']}/{s['model']}": s["candidate_sha256"] for s in summaries},
         "validation_rows_sha256": summaries[0]["validation_rows_sha256"],

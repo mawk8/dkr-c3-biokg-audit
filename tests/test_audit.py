@@ -91,3 +91,22 @@ def test_paired_difference(tmp_path, data, stats):
     assert diff["excludes_zero"].iloc[0]
     with pytest.raises(ValueError):
         paired_difference(out["a"], out["b"].iloc[:-1])
+
+
+def test_paired_difference_rejects_duplicate_query_keys():
+    frame = pd.DataFrame({"row_id": [7, 7], "direction": ["head", "head"],
+                          "target_global": [2, 2], "cluster_id": ["c", "c"], "rr": [0.5, 0.5]})
+    with pytest.raises(ValueError, match="unique|duplicate"):
+        paired_difference(frame, frame)
+
+
+@pytest.mark.parametrize(("column", "values", "by", "message"), [
+    ("cluster_id", ["c", "other"], None, "cluster"),
+    ("frequency_bin", ["low", "high"], "frequency_bin", "frequency"),
+])
+def test_paired_difference_rejects_mismatched_grouping(column, values, by, message):
+    frame = pd.DataFrame({"row_id": [7, 7], "direction": ["head", "tail"],
+                          "target_global": [2, 3], "cluster_id": ["c", "c"],
+                          "frequency_bin": ["low", "low"], "rr": [0.5, 1.0]})
+    with pytest.raises(ValueError, match=message):
+        paired_difference(frame, frame.assign(**{column: values}), by=by)

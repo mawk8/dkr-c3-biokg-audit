@@ -1,191 +1,60 @@
-<div align="center">
+# Popularity, Leakage, or Structure?
 
-# 🧬 C3 · Popularity, Leakage, or Structure?
+**Team 7 · An evaluation audit of link prediction on ogbl-biokg**
 
-**An evaluation audit of biomedical link prediction on `ogbl-biokg`**
+On 1,926 validation queries, ranking candidates by their training frequency in the relevant relation and role produced MRR **0.4782** with official candidates and **0.1192** with nearest-frequency candidates. The paired difference was **−0.3590** (95% cluster-bootstrap interval −0.3749 to −0.3432). Changing the candidate set substantially changes how well this simple baseline performs.
 
-*How much of a model's score comes from just predicting popular entities, and what is left once popularity is controlled?*
+[Read the six-page validation report](docs/Validation_Report.pdf) · [Original midway report](docs/Team7.pdf) · [Result tables](results/quick) · [Open experiments](docs/Blockers.md)
 
-![status](https://img.shields.io/badge/status-midway%20checkpoint-orange)
-![python](https://img.shields.io/badge/python-3.14-blue)
-![dataset](https://img.shields.io/badge/dataset-ogbl--biokg-6f42c1)
-![tests](https://img.shields.io/badge/tests-10%20passing-brightgreen)
-![split](https://img.shields.io/badge/test%20split-never%20scored-lightgrey)
+![Validation MRR by train-frequency stratum for official and nearest-frequency candidates](results/quick/mrr_by_frequency.png)
 
-</div>
+## What the evidence supports
 
----
+| Scorer | Official MRR | Nearest-frequency MRR | Same-bin-first MRR |
+|---|---:|---:|---:|
+| Random | 0.0166 | 0.0170 | 0.0165 |
+| Relation/role count prior | 0.4782 | 0.1192 | 0.1356 |
+| Global degree | 0.3816 | 0.0895 | 0.1006 |
+| Reverse lookup + count | 0.4782 | 0.1192 | 0.1356 |
+| HeadBlind, 500 updates | 0.3606 | Pending | Pending |
+| TransE, 500 updates | 0.2408 | Pending | Pending |
+| ComplEx, 500 updates | 0.0154 | Pending | Pending |
 
-## 📌 TL;DR
+The sample contains at most 20 validation triples per relation (963 triples, both prediction directions). Each query has 500 typed negatives. MRR averages reciprocal ranks. For example, two correct answers ranked first and fourth give MRR (1 + ¼) / 2 = 0.625.
 
-On the official `ogbl-biokg` protocol, a scorer that **ignores the query entirely** and ranks candidates by how often they appear in training (the *count prior*) reaches **MRR 0.478**. That is higher than every learned model in our pilots.
+* **Popularity.** In nearest-frequency evaluation, 545 of 1,926 queries meet the balance criterion of at least 25% of negatives having a count at least as high as the target. Count-prior MRR on these queries is 0.00479, versus 0.01237 for random. On the other 1,381 queries the count prior reaches 0.16433. Each protocol has its own balance flags.
+* **Reverse lookup.** For 1,726 same-type queries, zero had an exact same-relation reverse triple in train. The other 200 cross-type queries are inapplicable. The sample therefore cannot estimate the advantage of seeing such a reverse.
+* **Learned models.** Official pilot scores come from the original executed notebooks, one training seed per model. The archived data contain aggregate pilot scores. A paired learned-versus-frequency comparison requires exported weights or aligned per-query results on both protocols.
 
-When each true answer is compared against wrong answers **of similar popularity**, the count prior drops to **0.119**. For mid- and low-frequency answers it is **no better than random**.
+[Baseline estimates and intervals](results/quick/main_table.csv) · [Strata](results/quick/ci_by_stratum.csv) · [Paired comparisons](results/quick/paired_differences.csv) · [Pilot provenance](results/pilot_results.csv)
 
-<div align="center">
+## Reproduce the baseline audit
 
-![MRR by frequency stratum, official vs frequency-matched negatives](results/quick/mrr_by_frequency.png)
-
-<sub>MRR by train frequency of the true answer, with 95% cluster-bootstrap CIs. Validation subset: 963 triples / 1,926 queries.</sub>
-
-</div>
-
----
-
-## 🎯 Research question and success measure
-
-| | |
-|---|---|
-| **Task** | Head/tail completion on ogbl-biokg (drug, protein, disease, function, side effect; 51 relations). |
-| **Question** | How much performance comes from **candidate popularity** (H1) or **reverse-edge lookup** (H2), and what do **learned scorers** add (H3)? |
-| **Success measure** | A scorer captures structure beyond popularity if its MRR advantage over the count prior under **frequency-matched negatives** has a 95% CI that excludes zero, overall and in the mid/low frequency strata. |
-| **Not claimed** | Any medical or clinical validity of predictions. |
-
----
-
-## 📊 Results so far (validation subset)
-
-### Baseline ladder × evaluation protocol
-
-MRR with 95% cluster-bootstrap CIs (1,000 resamples over entity-pair clusters):
-
-| Scorer | Uses query entity? | Official negatives | Frequency-matched negatives |
-|---|:-:|---:|---:|
-| Random | ✗ | 0.017 [0.014, 0.021] | 0.017 [0.014, 0.021] |
-| **Count prior** (train count in relation/role) | ✗ | **0.478** [0.457, 0.498] | **0.119** [0.108, 0.130] |
-| Global degree (count over all relations) | ✗ | 0.382 [0.363, 0.401] | 0.090 [0.080, 0.099] |
-| Reverse lookup + count | ✓ | 0.478 (identical to count prior) | 0.119 (identical) |
-
-### Learned pilots (official negatives only; 500 updates, seed 101; [`results/pilot_results.csv`](results/pilot_results.csv))
-
-| Model | MRR | Hits@10 | Note |
-|---|---:|---:|---|
-| HeadBlind | 0.361 | 0.684 | still improving |
-| TransE | 0.241 | 0.582 | still improving |
-| ComplEx | 0.015 | 0.027 | at chance, under diagnosis |
-
-### Key findings
-
-- **H1, popularity explains most of the official score.** Under matching, count prior minus random is −0.001 [−0.007, 0.005] for mid-frequency answers and 0.000 [−0.002, 0.002] for low-frequency ones.
-- **Only 28% of queries are *popularity-matchable*.** For the most popular answers, too few equally popular wrong answers remain once known true triples are filtered out. On matchable queries the count prior scores 0.005 (chance). Matched results are therefore always reported split by this flag.
-- **H2, no reverse-edge leakage on this split.** None of the 1,726 same-type validation queries has its reverse triple in train, so reverse lookup adds nothing. The proposal's ~94% overlap expectation does not hold, and the effect is *not estimable*, which is different from a zero effect.
-
-Full discussion: [`docs/Checkpoint_Report.md`](docs/Checkpoin_Report.md).
-
----
-
-## 🚀 Quickstart: reproduce the main result
+From this branch in a project environment with the dependencies in `requirements.txt`:
 
 ```bash
-git clone https://github.com/mawk8/dkr-c3-biokg-audit.git && cd dkr-c3-biokg-audit
-python -m venv .venv && source .venv/bin/activate     # Python 3.14 verified
-pip install -r requirements.txt
-pytest -q tests                                        # 10 tests, ~10 s
-python scripts/run_audit.py --download                 # ~1 GB once, then ~1 min
+python -m pip install -r requirements.txt
+python -m pytest -q tests
+python scripts/run_audit.py --download --out work/baseline-reproduction
 ```
 
-Expected output: count prior MRR **0.4782** (official) → **0.119** (matched). This was verified from a fresh clone on 12 Nov 2026 with identical numbers.
+Use `--input-dir PATH` with a trusted local OGB dataset instead of downloading. The default quick sample uses row seed 71, matched-candidate seed 2024 and 1,000 bootstrap resamples. Use a fresh output path for each run. The committed quick manifest records Python 3.13.14 on Windows and a runtime of 467 seconds. The earlier main-branch verification used a separate Python 3.14 Linux environment.
 
-| Option | Effect |
-|---|---|
-| `--preset full` | All 162,886 validation triples instead of 20 per relation |
-| `--input-dir PATH` | Use an existing local OGB `biokg/` folder instead of downloading |
-| `--no-test-filter` | Ablation: don't remove test positives from matched negatives |
-| `--n-boot N` | Bootstrap resamples (default 1000) |
+The output includes pooled metrics, stratum estimates, paired differences, a figure and a run manifest. Per-query CSVs are under `work/runs/`. Only the matched-candidate builder uses test positives to filter known positives. All scores in the report use validation queries. [Run manifest](results/quick/run_info.json)
 
-### Outputs → `results/<preset>/`
+## Score an exported pilot
 
-| File | Contents |
-|---|---|
-| `main_table.csv` | MRR and Hits@1/3/10 with CIs per protocol × scorer |
-| `ci_by_stratum.csv` | The same split by frequency bin, matchability and direction |
-| `paired_differences.csv` | Paired MRR deltas with CIs (e.g. matched − official) |
-| `mrr_by_frequency.png` | Main figure (above) |
-| `reverse_audit_train.csv` | Reverse-edge closure per relation in train |
-| `run_info.json` | Seeds, candidate hashes, balance diagnostics, environment |
+1. For a Kaggle pilot, open the [bundled notebook](notebooks/C3_Kaggle_Baselines_and_Pilot_EN.ipynb). Choose pilot mode, one model and one seed. Enable the notebook's required download/install switches on a fresh Kaggle session. Keep its metric-gate output, elapsed time, selected step and scoring export.
+2. Copy the selected `scoring_checkpoint.pt` to your local audit workspace. With the dataset already prepared, run:
 
-Per-query CSVs (large) are written to `work/runs/<id>/`, which is git-ignored.
-
-### Learned-model pilots (Kaggle GPU)
-
-HeadBlind, TransE and ComplEx are trained in [`notebooks/C3_Kaggle_Baselines_and_Pilot_EN.ipynb`](notebooks/C3_Kaggle_Baselines_and_Pilot_EN.ipynb). The notebook bundles the source, so no repo checkout is needed on Kaggle.
-
-1. Import the notebook into Kaggle. Enable Internet, and a GPU for pilots.
-2. Set `MODE`:
-   - `"prepare_only"` (default) does nothing.
-   - `"baselines"` runs the non-learned scorers on CPU and needs `ALLOW_DOWNLOAD=True` and `ALLOW_OGB_INSTALL=True`.
-   - `"pilot"` trains one of `head_blind`, `complex` or `transe`.
-3. Defaults: 128 real dimensions, 500 updates, seed 101, batch 256, 64 negatives, lr 1e-3. Settings are in [`configs/kaggle_pilot.json`](configs/kaggle_pilot.json). There is no automatic seed sweep.
-4. The metric and data gates must pass. Keep the printed `completed_steps` and `stop_reason`.
-5. Outputs go to `/kaggle/working/dkr_c3_en`; download them from Kaggle's **Output** panel. Keep Kaggle's preinstalled CUDA Torch and install only `ogb==1.3.6`.
-
----
-
-## 🔬 Evaluation protocols
-
-| Protocol | Negatives per query | What it tests |
-|---|---|---|
-| `official` | 500 uniform typed negatives provided by OGB | The leaderboard setting |
-| `matched_nearest` | 500 typed negatives centred on the true answer's **popularity rank** (half less popular, half more popular when possible) | Whether a scorer still works when popularity carries no signal |
-| `matched_bin` | 500 typed negatives from the same zero/low/mid/high frequency bin | Ablation of the matching rule |
-
-All protocols use the official OGB mid-rank metric (ties count half), checked against the installed `ogb.linkproppred.Evaluator`.
-
-Matched negatives exclude every known true triple from train, validation and test. Test head/relation/tail are read **only** for this filter, and test triples are never scored.
-
----
-
-## 🗂️ Repository layout
-
-```
-├── src/biokg_audit/
-│   ├── data.py          # OGB download/cache, typed global IDs, leakage audit
-│   ├── baselines.py     # train-only stats; random / count / degree / reverse scorers
-│   ├── matched.py       # frequency-matched negative sampler
-│   ├── evaluate.py      # chunked validation evaluator, per-query + stratum export
-│   ├── stats.py         # cluster-bootstrap CIs, paired differences
-│   ├── training.py      # HeadBlind / TransE / ComplEx (Kaggle GPU pilots)
-│   └── workflow.py      # run folders, environment capture, export
-├── scripts/run_audit.py # ▶ one command to the main result
-├── tests/               # pytest suite on a synthetic typed graph
-├── results/
-│   ├── quick/           # ▶ main result: tables, CIs, figure (from run_audit.py)
-│   └── pilot_results.csv  # first-checkpoint scores incl. learned pilots
-├── docs/                # checkpoint report, blockers
-├── notebooks/           # Kaggle notebook for the learned-model pilots
-├── evidence/            # original executed notebooks and baseline exports (read-only)
-└── configs/             # pilot hyperparameters
+```bash
+python scripts/run_audit.py --checkpoint work/scoring_checkpoint.pt
 ```
 
----
+Repeat `--checkpoint PATH` to compare additional models. The CLI checks dataset identity and shares validation rows and candidate arrays across scorers. It writes the learned comparison to a new run directory. For an older trusted training snapshot with its original manifest and mapping, use:
 
-## 🧭 Roadmap to the final report (3 Dec)
+```bash
+python scripts/export_scoring_checkpoint.py work/best.pt work/scoring_checkpoint.pt --original-run work/original-run
+```
 
-- [x] Leakage audit, official-metric parity, train-only statistics
-- [x] Baseline ladder (random → count → degree → reverse)
-- [x] Frequency-matched negatives with balance and matchability diagnostics
-- [x] Cluster-bootstrap CIs and paired differences
-- [x] One-command pipeline, pinned environment, tests, fresh-clone check
-- [ ] Full-validation run (`--preset full`)
-- [ ] Learned models re-scored under matched negatives (requires checkpoint export)
-- [ ] ComplEx diagnosis; TransE/HeadBlind at a common horizon × 3 seeds
-- [ ] Locked final test evaluation
-
-Open issues are tracked in [`docs/Blockers.md`](docs/Blockers.md).
-
----
-
-## 📚 Documents
-
-| File | Purpose |
-|---|---|
-| [`docs/checkpoint-report.md`](docs/checkpoint-report.md) | Midway report: protocol, results, reverse-edge correction, AI-use statement |
-| [`docs/blockers.md`](docs/blockers.md) | Outstanding work, ordered by impact |
-
----
-
-<div align="center">
-<sub>Course project C3 · Graph Neural Networks · Innopolis University, 2026 ·
-Data: <a href="https://ogb.stanford.edu/docs/linkprop/#ogbl-biokg">OGB ogbl-biokg</a> (Hu et al., 2020) ·
-AI assistance is disclosed in the checkpoint report.</sub>
-</div>
+The [audit source](src/biokg_audit), [synthetic tests](tests), [pilot configuration](configs/kaggle_pilot.json) and [executed notebooks](evidence/original_notebooks) document the implementation and historical evidence. The report credits OGB, the original model authors and AI assistance. Full-validation estimates, multi-seed learned comparisons and a locked final test remain open.

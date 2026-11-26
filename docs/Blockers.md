@@ -1,6 +1,6 @@
 # Outstanding work (ordered by impact on the main result)
 
-1. **Learned models under matched negatives.** Weights, per-query CSVs and loss/time/VRAM logs from the Kaggle pilots were not exported, so HeadBlind/TransE/ComplEx cannot yet be re-scored on the matched candidates. Needed: re-run with checkpoint export, then call `evaluate_validation(..., candidate_sets=...)`.
+1. **Learned models under matched negatives.** Weights, per-query CSVs and loss/time/VRAM logs from the Kaggle pilots were not exported, so HeadBlind/TransE/ComplEx cannot yet be re-scored on the matched candidates. The updated Kaggle notebook exports scoring weights. Recover an original snapshot with its manifest or run one export-enabled pilot, then use the checkpoint command in the README. The synthetic CLI test covers this path.
 2. **ComplEx is at chance level** (MRR 0.015 after 500 updates). Inspect loss curves, add regularisation and tune the learning rate, and rule out an implementation bug before any seed sweep.
 3. **Under-trained learned pilots.** HeadBlind and TransE were still improving at update 500, and only seed 101 exists. Choose a common horizon, then run seeds 101/202/303.
 4. **Full-validation run.** All matched/CI results are on the 20-triples-per-relation subset (zero stratum n=25). Run `python scripts/run_audit.py --preset full`.

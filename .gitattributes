@@ -2,3 +2,4 @@
 evidence/** -text
 *.ipynb -text
 *.npy -text
+*.pdf binary

@@ -62,9 +62,15 @@ def paired_difference(a: pd.DataFrame, b: pd.DataFrame, metric: str = "rr",
     """CI of mean(a - b) on identical queries; raises if the query sets differ."""
     left = a.set_index(KEY)
     right = b.set_index(KEY)
+    if not left.index.is_unique or not right.index.is_unique:
+        raise ValueError("Paired comparison requires unique (row_id, direction) keys")
     if len(left) != len(right) or not left.index.sort_values().equals(right.index.sort_values()):
         raise ValueError("Paired comparison needs identical (row_id, direction) query sets")
     right = right.loc[left.index]
+    if not left["cluster_id"].equals(right["cluster_id"]):
+        raise ValueError("Paired queries disagree on the bootstrap cluster")
+    if by == "frequency_bin" and not left[by].equals(right[by]):
+        raise ValueError("Paired queries disagree on the train-frequency bin")
     if not (left["target_global"].to_numpy() == right["target_global"].to_numpy()).all():
         raise ValueError("Paired queries disagree on the positive target")
     diff = pd.DataFrame({"diff": left[metric].to_numpy(float) - right[metric].to_numpy(float),

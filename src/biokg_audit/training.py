@@ -220,6 +220,19 @@ def _identity(data: Mapping[str, Any]) -> dict[str, str]:
             "dataset_manifest_sha256": _sha(data["manifest"])}
 
 
+def _scoring_identity(data: Mapping[str, Any]) -> dict[str, str]:
+    """Bind scoring to the ID mapping and contents, independent of cache creation."""
+    manifest = data["manifest"]
+    if "splits" not in manifest:
+        return _identity(data)
+    splits = {
+        split: {name: entry["sha256"]
+                for name, entry in manifest["splits"][split]["arrays"].items()}
+        for split in ("train", "valid")
+    }
+    return {"mapping_sha256": _sha(data["mapping"]), "split_arrays_sha256": _sha(splits)}
+
+
 def _environment(model: LearnedScorer) -> dict[str, Any]:
     device = model.device
     return {"python": platform.python_version(), "platform": platform.platform(),
@@ -349,6 +362,65 @@ def load_model_checkpoint(model: LearnedScorer, path: str | Path,
             "created_at_utc": checkpoint["created_at_utc"]}
 
 
+_SCORING_METADATA = ("step", "kind", "model_config", "best_mrr", "created_at_utc",
+                     "data_identity", "config", "scientific_config_sha256",
+                     "source_sha256", "environment")
+
+
+def export_scoring_checkpoint(checkpoint_path: str | Path, output_path: str | Path,
+                              data: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Convert a trusted project training checkpoint to a portable scoring file.
+
+    For an older checkpoint, supply its original mapping and manifest for
+    portability across cache rebuilds. Without them it retains strict identity.
+    """
+    checkpoint = _read_checkpoint(Path(checkpoint_path))
+    if checkpoint["format_version"] != 1:
+        raise ValueError("Unsupported training checkpoint version")
+    if data is not None and checkpoint["data_identity"] != _identity(data):
+        raise ValueError("Original checkpoint dataset/mapping mismatch")
+    scoring_identity = checkpoint.get("scoring_identity", checkpoint["data_identity"])
+    if data is not None:
+        scoring_identity = _scoring_identity(data)
+    metadata = {key: checkpoint[key] for key in _SCORING_METADATA}
+    metadata["scoring_identity"] = scoring_identity
+    metadata["validation_history"] = checkpoint.get("validation_history", [])
+    # Normalize incidental version subclasses to JSON primitives for weights_only.
+    metadata = json.loads(_canonical(metadata))
+    with Path(output_path).open("xb") as handle:
+        torch.save({"scoring_format_version": 1, "metadata": metadata,
+                    "model_state": dict(checkpoint["model_state"])}, handle)
+    return metadata
+
+
+def restore_scoring_checkpoint(path: str | Path, data: Mapping[str, Any],
+                               device: str = "cpu") -> tuple[LearnedScorer, dict[str, Any]]:
+    """Load the exported weights and validate them against a verified dataset."""
+    checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
+    if checkpoint.get("scoring_format_version") != 1:
+        raise ValueError("Expected a version 1 scoring export")
+    metadata = checkpoint["metadata"]
+    step = metadata["step"]
+    if type(step) is not int or step < 0 or metadata["kind"] not in ("best", "last"):
+        raise ValueError("Invalid checkpoint step or kind")
+    identity = metadata["scoring_identity"]
+    current_identity = (_scoring_identity(data) if "split_arrays_sha256" in identity
+                        else _identity(data))
+    if identity != current_identity:
+        raise ValueError("Checkpoint dataset/mapping mismatch")
+    config = metadata["model_config"]
+    model = make_model(config["name"], data, config["dim"], config["seed"], device)
+    if config != model.model_config():
+        raise ValueError("Checkpoint/model configuration mismatch")
+    state = checkpoint["model_state"]
+    if any(value.dtype != torch.float32 or not torch.isfinite(value).all()
+           for value in state.values()):
+        raise ValueError("Checkpoint must contain finite float32 model weights")
+    model.load_state_dict(state, strict=True)
+    model.eval()
+    return model, metadata
+
+
 def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConfig,
                 run_dir: Path, evaluate_fn: Callable[[LearnedScorer, int], Mapping[str, Any]] | None = None,
                 resume_path: str | Path | None = None, progress: bool = True) -> dict[str, Any]:
@@ -370,6 +442,7 @@ def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConf
     _validate_train(data, model)
     run_dir = Path(run_dir).resolve()
     identity, environment = _identity(data), _environment(model)
+    scoring_identity = _scoring_identity(data)
     scientific_sha = _sha(config.scientific())
     source_sha = _source_sha()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate,
@@ -463,7 +536,7 @@ def train_model(model: LearnedScorer, data: Mapping[str, Any], config: TrainConf
             "run_dir": str(run_dir), "model_config": model.model_config(),
             "config": asdict(config), "config_sha256": _sha(asdict(config)),
             "scientific_config_sha256": scientific_sha, "source_sha256": source_sha,
-            "data_identity": identity, "environment": environment,
+            "data_identity": identity, "scoring_identity": scoring_identity, "environment": environment,
             "validation_enabled": validation_enabled,
             "model_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
             "positive_rng": positive_rng.bit_generator.state,

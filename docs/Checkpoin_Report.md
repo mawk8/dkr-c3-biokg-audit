@@ -67,7 +67,7 @@ has not yet been independently verified from learned-run CSV.
 
 ## Official versus frequency-matched evaluation
 
-Reproduce with `python scripts/run_audit.py --download` (about 1 minute after
+Reproduce with `python scripts/run_audit.py --download` (runtime depends on hardware after
 the one-time download). Tables and figure are in `results/quick/`.
 
 For every query we replace the 500 official negatives (uniform over the target
@@ -93,18 +93,16 @@ Same 963 triples / 1,926 queries; MRR with 95% cluster-bootstrap CIs
 
 Findings:
 
-- Under matching, the count prior is at chance for mid and low frequency
+- Under matching, the paired intervals include zero for mid- and low-frequency
   answers (count prior - random: mid -0.001 [-0.007, 0.005], low 0.000
   [-0.002, 0.002]).
 - Its remaining 0.119 comes almost entirely from the high stratum. Only 545 of
   1,926 queries (28%) are *popularity-matchable*, meaning at least 25% of
   negatives are as popular as the positive. For the rest, the most popular true
   answers have too few more-popular entities left once known positives are
-  filtered out. On matchable queries the count prior scores 0.005 (chance).
+  filtered out. On these 545 queries the count prior scores 0.00479 and random scores 0.01237.
   Every matched result is therefore reported split by this flag.
-- Global degree ranks below the count prior under both protocols. It beats the
-  count prior only for the 25 zero-frequency answers (+0.153 [0.062, 0.285]),
-  a small cell.
+- Global degree ranks below the count prior under both protocols. Its largest positive matched difference is in the 25 zero-frequency answers (+0.153 [0.062, 0.285]). Smaller positive matched differences also appear in low and mid frequency bins.
 - These baselines set the bar for learned models. On the official protocol the
   bar is 0.478. On matched negatives it is 0.119 overall and about 0.005 on
   matchable queries.

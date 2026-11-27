@@ -18,6 +18,8 @@ def main(argv=None):
     parser.add_argument("output", type=Path, help="new scoring export .pt file")
     parser.add_argument("--original-run", type=Path,
                         help="run folder holding original entity_mapping.json and dataset_manifest.json")
+    parser.add_argument("--completed-checkpoint", type=Path,
+                        help="trusted last training checkpoint from the same completed best-checkpoint run")
     args = parser.parse_args(argv)
     data = None
     if args.original_run is not None:
@@ -27,7 +29,9 @@ def main(argv=None):
             "mapping": json.loads(mapping.read_text(encoding="utf-8")),
             "manifest": json.loads(manifest.read_text(encoding="utf-8")),
         }
-    metadata = export_scoring_checkpoint(_no_links(args.checkpoint), _no_links(args.output), data=data)
+    completed = _no_links(args.completed_checkpoint) if args.completed_checkpoint is not None else None
+    metadata = export_scoring_checkpoint(_no_links(args.checkpoint), _no_links(args.output), data=data,
+                                         completed_checkpoint_path=completed)
     print(f"Exported {metadata['kind']} checkpoint at step {metadata['step']} to {args.output}")
 
 

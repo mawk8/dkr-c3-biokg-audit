@@ -8,11 +8,7 @@ How much performance on ogbl-biokg can be obtained from candidate frequency or
 explicit reverse-edge lookup, and what do learned endpoint-dependent scorers add?
 The project audits evaluation behaviour; it does not validate medical claims.
 
-**Success measure.** A scorer captures structure beyond popularity if its MRR
-advantage over the count prior under *frequency-matched* negatives has a 95%
-cluster-bootstrap CI that excludes zero, overall and in the mid/low frequency
-strata. The count prior's own drop under matching is a sanity check, not a
-result: the matching is built on the same train counts.
+**Interpretation.** The count prior's change on the historical matched candidates measures sensitivity to candidate selection. The primary planned H3 comparison is the paired difference in reciprocal rank between ComplEx and HeadBlind, averaged over matched training and candidate seeds. The November pilot outputs contain insufficient evidence to estimate H3. The [README](../README.md#compare-complex-and-headblind-directly-h3) describes the dedicated validation protocol.
 
 ## Data and protocol
 

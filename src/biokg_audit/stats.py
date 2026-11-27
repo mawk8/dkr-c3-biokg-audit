@@ -57,9 +57,8 @@ def summarize(frame: pd.DataFrame, by: str | None = None, metrics=METRICS, **kwa
     return pd.DataFrame(rows)
 
 
-def paired_difference(a: pd.DataFrame, b: pd.DataFrame, metric: str = "rr",
-                      by: str | None = None, **kwargs) -> pd.DataFrame:
-    """CI of mean(a - b) on identical queries; raises if the query sets differ."""
+def aligned_queries(a: pd.DataFrame, b: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Align unique queries and verify their positive targets and clusters."""
     left = a.set_index(KEY)
     right = b.set_index(KEY)
     if not left.index.is_unique or not right.index.is_unique:
@@ -69,10 +68,17 @@ def paired_difference(a: pd.DataFrame, b: pd.DataFrame, metric: str = "rr",
     right = right.loc[left.index]
     if not left["cluster_id"].equals(right["cluster_id"]):
         raise ValueError("Paired queries disagree on the bootstrap cluster")
-    if by == "frequency_bin" and not left[by].equals(right[by]):
-        raise ValueError("Paired queries disagree on the train-frequency bin")
     if not (left["target_global"].to_numpy() == right["target_global"].to_numpy()).all():
         raise ValueError("Paired queries disagree on the positive target")
+    return left, right
+
+
+def paired_difference(a: pd.DataFrame, b: pd.DataFrame, metric: str = "rr",
+                      by: str | None = None, **kwargs) -> pd.DataFrame:
+    """CI of mean(a - b) on identical queries; raises if the query sets differ."""
+    left, right = aligned_queries(a, b)
+    if by == "frequency_bin" and not left[by].equals(right[by]):
+        raise ValueError("Paired queries disagree on the train-frequency bin")
     diff = pd.DataFrame({"diff": left[metric].to_numpy(float) - right[metric].to_numpy(float),
                          "cluster_id": left["cluster_id"].to_numpy()})
     if by is not None:

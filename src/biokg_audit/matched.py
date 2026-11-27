@@ -31,10 +31,15 @@ import hashlib
 import numpy as np
 from tqdm.auto import tqdm
 
-from .baselines import classify_frequency
+from .baselines import _mix64, classify_frequency
 from .data import contains_keys, triple_keys
 
 MODES = ("bin", "nearest")
+RANK_POOL_PROTOCOL = "matched_rank_pool1000_k500_v1"
+POOL_SEED = 911
+CANDIDATE_SEEDS = (311, 312, 313)
+POOL_SIZE = 1000
+SAMPLE_SIZE = 500
 
 
 def known_positive_keys(data: dict, stats: dict, extra_keys: np.ndarray | None = None) -> np.ndarray:
@@ -210,3 +215,79 @@ def official_count_gap(data: dict, stats: dict, rows: np.ndarray) -> dict:
     return {"same_bin_fraction": float(np.mean([v[0] for v in result.values()])),
             "mean_abs_log_count_gap": float(np.mean([v[1] for v in result.values()])),
             "frac_neg_count_ge_target": float(np.mean([v[2] for v in result.values()]))}
+
+
+class RankPoolSampler:
+    """Build the fixed typed pool from train ranks and a positive-only filter."""
+
+    def __init__(self, data: dict, stats: dict, test_keys: np.ndarray):
+        if test_keys is None:
+            raise ValueError("Primary matching requires the verified test-positive filter")
+        self.stats = stats
+        known = known_positive_keys(data, stats, test_keys)
+        n, n_rel = stats["n_entities"], stats["n_relations"]
+        head_rel, tail = np.divmod(known, np.uint64(n))
+        heads, relation = np.divmod(head_rel, np.uint64(n_rel))
+        # Put the candidate ID in the low position for both directions, so
+        # two binary searches isolate positives for a fixed endpoint.
+        self.keys = (np.sort(triple_keys(tail, relation, heads, n, n_rel)), known)
+        self.cells = {}
+
+    def sample_one(self, row_id: int, direction: int, relation: int, fixed: int, target: int):
+        stats = self.stats
+        cell_id = (relation, direction)
+        if cell_id not in self.cells:
+            type_id = int(stats["schema_head" if direction == 0 else "schema_tail"][relation])
+            offset = int(stats["type_offsets"][type_id])
+            size = int(stats["type_sizes"][type_id])
+            counts = stats["counts"][relation, direction, offset:offset+size]
+            ordered = np.sort(counts)
+            twice_rank = (np.searchsorted(ordered, counts, "left") +
+                          np.searchsorted(ordered, counts, "right") - 1)
+            self.cells[cell_id] = (offset, counts, twice_rank)
+        offset, counts, twice_rank = self.cells[cell_id]
+        size = len(counts)
+        target_index = target - offset
+        if not 0 <= target_index < size:
+            raise ValueError("Positive target outside train relation-role schema")
+        start = (fixed * int(stats["n_relations"]) + relation) * int(stats["n_entities"])
+        keys = self.keys[direction]
+        lo, hi = keys.searchsorted(np.array([start + offset, start + offset + size], dtype=np.uint64))
+        forbidden = (keys[lo:hi] - np.uint64(start + offset)).astype(np.int64)
+        eligible = np.ones(size, dtype=bool)
+        eligible[forbidden] = False
+        eligible[target_index] = False
+        ids = np.flatnonzero(eligible)
+        count = len(ids)
+        status = ("full_pool" if count >= POOL_SIZE else
+                  "reduced_pool" if count >= SAMPLE_SIZE else "insufficient_eligible")
+        info = {"eligible_count": count, "pool_count": min(count, POOL_SIZE), "status": status}
+        if status != "full_pool":
+            return info, {}
+
+        # The distances between doubled zero-based midranks sort exactly as
+        # normalized rank distances. Restrict tie hashing to the nearest shell.
+        distances = np.abs(twice_rank[ids] - twice_rank[target_index])
+        boundary = np.partition(distances, POOL_SIZE - 1)[POOL_SIZE - 1]
+        near = distances <= boundary
+        ids, distances = ids[near], distances[near]
+        digest = hashlib.sha256(f"{POOL_SEED}:{row_id}:{direction}".encode()).digest()
+        query_seed = np.uint64(int.from_bytes(digest[:8], "little"))
+        tie_hash = _mix64(query_seed ^ (ids + offset).astype(np.uint64))
+        pool = ids[np.lexsort((ids, tie_hash, distances))[:POOL_SIZE]]
+        samples = {}
+        target_count = counts[target_index]
+        for seed in CANDIDATE_SEEDS:
+            local = _rng(seed, row_id, direction).choice(pool, size=SAMPLE_SIZE, replace=False)
+            neg_counts = counts[local]
+            log_gap = np.log1p(neg_counts) - np.log1p(target_count)
+            samples[seed] = (local + offset, {
+                "mean_abs_rank_distance": float(np.abs(twice_rank[local] - twice_rank[target_index]).mean()
+                                                / (2 * (size - 1))),
+                "mean_signed_log_count_difference": float(log_gap.mean()),
+                "mean_abs_log_count_difference": float(np.abs(log_gap).mean()),
+                "fraction_equal_count": float(np.mean(neg_counts == target_count)),
+                "fraction_lower_count": float(np.mean(neg_counts < target_count)),
+                "fraction_higher_count": float(np.mean(neg_counts > target_count)),
+            })
+        return info, samples

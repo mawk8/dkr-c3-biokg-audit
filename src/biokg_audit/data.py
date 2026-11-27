@@ -1,8 +1,9 @@
 """Safe, validation-only BioKG preparation for a Kaggle/Colab workspace.
 
 Inputs are the public OGB train.pt/valid.pt files. Outputs use typed GLOBAL
-entity IDs and read-only .npy memory maps. No test file is opened, extracted,
-or passed to a trainer. Calling load_data is an action; importing is inert.
+entity IDs and read-only .npy memory maps. load_data leaves test untouched.
+The separate mask loader supplies only test-positive keys to the audit.
+Calling load_data is an action; importing is inert.
 """
 
 from __future__ import annotations
@@ -47,10 +48,14 @@ def _utc() -> str:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
+        return _hash_stream(stream)
+
+
+def _hash_stream(stream) -> str:
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+        digest.update(block)
     return digest.hexdigest()
 
 
@@ -64,8 +69,13 @@ def _version(package: str) -> str | None:
 def _no_links(path: Path) -> Path:
     """Reject existing symlink/junction components, including input parents."""
     path = path.expanduser().absolute()
-    for item in (path, *path.parents):
-        if item.is_symlink() or (hasattr(item, "is_junction") and item.is_junction()):
+    for item in (*reversed(path.parents), path):
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            continue
+        if (stat.S_ISLNK(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError(f"Symlinks/junctions are not allowed: {item}")
     return path
 
@@ -342,23 +352,24 @@ def load_data(workspace: Path, input_dir: Path | None = None, download: bool = F
     workspace.mkdir(parents=True, exist_ok=True)
     data_dir = _no_links(workspace / "data")
     data_dir.mkdir(exist_ok=True)
-    pointer = _no_links(data_dir / "public_source.json")
     if input_dir is not None:
         root = _find_public_root(Path(input_dir))
         provenance = {"kind": "explicit_trusted_public_ogb_input", "network_download_this_call": False}
-    elif pointer.is_file():
-        selection = json.loads(pointer.read_text(encoding="utf-8"))
-        relative = PurePosixPath(selection["relative_root"])
-        if relative.is_absolute() or ".." in relative.parts or ":" in str(relative) or "\\" in str(relative):
-            raise ValueError("Invalid persisted public source path")
-        root = _find_public_root(data_dir.joinpath(*relative.parts))
-        provenance = {"kind": "previous_explicit_public_download", "network_download_this_call": False}
-    elif download:
-        root = _download_public(data_dir)
-        _write_json_new(pointer, {"relative_root": root.relative_to(data_dir).as_posix()})
-        provenance = {"kind": "official_https_download", "network_download_this_call": True}
     else:
-        raise FileNotFoundError("Provide trusted public OGB INPUT_DIR or explicitly set DOWNLOAD_DATA=True. No download was attempted.")
+        pointer = _no_links(data_dir / "public_source.json")
+        if pointer.is_file():
+            selection = json.loads(pointer.read_text(encoding="utf-8"))
+            relative = PurePosixPath(selection["relative_root"])
+            if relative.is_absolute() or ".." in relative.parts or ":" in str(relative) or "\\" in str(relative):
+                raise ValueError("Invalid persisted public source path")
+            root = _find_public_root(data_dir.joinpath(*relative.parts))
+            provenance = {"kind": "previous_explicit_public_download", "network_download_this_call": False}
+        elif download:
+            root = _download_public(data_dir)
+            _write_json_new(pointer, {"relative_root": root.relative_to(data_dir).as_posix()})
+            provenance = {"kind": "official_https_download", "network_download_this_call": True}
+        else:
+            raise FileNotFoundError("Provide trusted public OGB INPUT_DIR or explicitly set DOWNLOAD_DATA=True. No download was attempted.")
     node_metadata = _node_metadata(root)
     sources = {s: {"sha256": _sha256(root / "split" / "random" / f"{s}.pt"),
                    "bytes": (root / "split" / "random" / f"{s}.pt").stat().st_size}
@@ -392,9 +403,10 @@ def load_data(workspace: Path, input_dir: Path | None = None, download: bool = F
             "test_overlap": "not_checked", "all_known_negative_filter": "not_verified_test_not_loaded",
             "stage": "preliminary_validation_only",
         }
-        download_provenance = root.parent / "download_provenance.json"
-        if input_dir is None and download_provenance.is_file():
-            manifest["download"] = json.loads(download_provenance.read_text(encoding="utf-8"))
+        if input_dir is None:
+            download_provenance = _no_links(root.parent / "download_provenance.json")
+            if download_provenance.is_file():
+                manifest["download"] = json.loads(download_provenance.read_text(encoding="utf-8"))
         _write_json_new(cache / "entity_mapping.json", mapping)
         _write_json_new(cache / "manifest.json", manifest)
         _write_json_new(cache_pointer, {"cache_directory": cache.name})
@@ -415,41 +427,116 @@ def load_data(workspace: Path, input_dir: Path | None = None, download: bool = F
     return {**splits, "n_entities": N_ENTITIES, "n_relations": N_RELATIONS,
             "type_offsets": TYPE_OFFSETS.copy(), "type_sizes": TYPE_SIZES.copy(),
             "type_names": TYPE_NAMES, "schema_head": schema_head, "schema_tail": schema_tail,
-            "mapping": _mapping(), "manifest": manifest, "cache_dir": cache}
+            "mapping": _mapping(), "manifest": manifest, "cache_dir": cache,
+            "public_source": {"root": root, "archive": root.parent / "biokg.zip" if input_dir is None else None}}
 
 
 def load_test_positive_keys(data: dict, archive: Path | None = None) -> np.ndarray:
     """Sorted uint64 keys of TEST positives, for the filtered-negative mask ONLY.
 
-    Reads head/relation/tail of split/random/test.pt from the retained official
-    ZIP. Test negatives are never read and test triples are never scored. The
-    keys are cached next to the train/valid cache as test_positive_keys.npy.
+    The source is the selected local split or official archive. Only positive
+    columns are used. The caller can persist test_positive_mask_provenance in
+    its run manifest. Neither the keys nor the provenance enters the train cache.
     """
-    import io
+    selection = data["public_source"]
+    selected_archive = selection["archive"]
+    source_archive = archive if archive is not None else selected_archive
+    member = "biokg/split/random/test.pt"
+    cache = _no_links(Path(data["cache_dir"]))
+    sources = data["manifest"]["source_files"]
+    source_path = (_no_links(Path(source_archive)) if source_archive is not None
+                   else _no_links(Path(selection["root"]) / "split" / "random" / "test.pt"))
+    with source_path.open("rb") as stream:
+        source_hash = _hash_stream(stream)
+        stream.seek(0)
+        if source_archive is not None and archive is None:
+            provenance_path = _no_links(source_path.parent / "download_provenance.json")
+            download = json.loads(provenance_path.read_text(encoding="utf-8"))
+            if source_hash != download["archive_sha256"]:
+                raise ValueError("Test mask archive hash mismatch with download provenance")
+        identity = {"version": 1, "source_kind": "archive" if source_archive is not None else "local_split",
+                    "source_sha256": source_hash, "archive_member": member if source_archive is not None else None,
+                    "train_valid_source_files": sources, "mapping": _mapping()}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        folder = _no_links(cache / f"test_mask_v1_{fingerprint}")
+        folder.mkdir(exist_ok=True)
+        manifests = []
+        for attempt in sorted(folder.iterdir()):
+            path = _no_links(attempt / "manifest.json")
+            if path.is_file():
+                manifests.append(path)
+        if manifests:
+            path = _no_links(manifests[0])
+            metadata = json.loads(path.read_text(encoding="utf-8"))
+            keys_path = _no_links(path.parent / "keys.npy")
+            if metadata["identity"] != identity:
+                raise ValueError("Test mask cache source mismatch")
+            with keys_path.open("rb") as cached:
+                if _hash_stream(cached) != metadata["keys_sha256"]:
+                    raise ValueError("Test mask cache hash mismatch")
+                cached.seek(0)
+                keys = np.load(cached, allow_pickle=False)
+            _validate_mask_keys(keys, metadata["n_keys"])
+        else:
+            if source_archive is not None:
+                with zipfile.ZipFile(stream) as bundle:
+                    for split in sources:
+                        with bundle.open(_test_zip_member(bundle, f"biokg/split/random/{split}.pt")) as split_stream:
+                            if _hash_stream(split_stream) != sources[split]["sha256"]:
+                                raise ValueError(f"Test mask archive {split} hash mismatch with selected dataset")
+                    with bundle.open(_test_zip_member(bundle, member)) as split_stream:
+                        keys = _read_test_keys(split_stream)
+            else:
+                keys = _read_test_keys(stream)
+            stream.seek(0)
+            if _hash_stream(stream) != source_hash:
+                raise ValueError("Test mask source changed while reading")
+            attempt = _no_links(folder / uuid.uuid4().hex)
+            attempt.mkdir(exist_ok=False)
+            keys_path = attempt / "keys.npy"
+            with keys_path.open("xb") as output:
+                np.save(output, keys, allow_pickle=False)
+            metadata = {"identity": identity, "keys_sha256": _sha256(keys_path), "n_keys": len(keys)}
+            partial = attempt / "manifest.json.partial"
+            _write_json_new(partial, metadata)
+            os.rename(partial, attempt / "manifest.json")
+    data["test_positive_mask_provenance"] = {**metadata, "fingerprint": fingerprint, "verified": True,
+                                             "source_name": source_path.name, "cache_path": keys_path.relative_to(cache).as_posix()}
+    return keys
+
+
+def _test_zip_member(bundle: zipfile.ZipFile, name: str) -> zipfile.ZipInfo:
+    matches = [item for item in bundle.infolist() if item.filename == name]
+    if len(matches) != 1 or matches[0].is_dir() or stat.S_ISLNK(matches[0].external_attr >> 16):
+        raise ValueError(f"Expected exactly one regular ZIP member: {name}")
+    return matches[0]
+
+
+def _read_test_keys(stream) -> np.ndarray:
     import torch
 
-    cache = Path(data["cache_dir"])
-    cached = cache / "test_positive_keys.npy"
-    if cached.is_file():
-        return np.load(cached, allow_pickle=False)
-    if archive is None:
-        data_dir = cache.parent
-        selection = json.loads((data_dir / "public_source.json").read_text(encoding="utf-8"))
-        archive = data_dir.joinpath(*PurePosixPath(selection["relative_root"]).parts).parent / "biokg.zip"
-    with zipfile.ZipFile(_no_links(Path(archive))) as bundle:
-        raw = torch.load(io.BytesIO(bundle.read("biokg/split/random/test.pt")),
-                         weights_only=False, map_location="cpu")
-    n_rows = len(_as_array(raw["head"]))
-    head_type = _type_ids("test.head_type", raw["head_type"], n_rows).astype(np.int64)
-    tail_type = _type_ids("test.tail_type", raw["tail_type"], n_rows).astype(np.int64)
-    heads = _as_array(raw["head"]).astype(np.int64) + TYPE_OFFSETS[head_type]
-    tails = _as_array(raw["tail"]).astype(np.int64) + TYPE_OFFSETS[tail_type]
-    if np.any(heads - TYPE_OFFSETS[head_type] >= TYPE_SIZES[head_type]) or np.any(tails - TYPE_OFFSETS[tail_type] >= TYPE_SIZES[tail_type]):
-        raise ValueError("test endpoint ID outside its type range")
-    keys = np.unique(triple_keys(heads, _as_array(raw["relation"]).astype(np.int64), tails))
-    del raw
-    np.save(cached, keys, allow_pickle=False)
-    return keys
+    raw = torch.load(stream, weights_only=False, map_location="cpu")
+    required = {"head", "relation", "tail", "head_type", "tail_type"}
+    if not isinstance(raw, dict) or not required.issubset(raw):
+        raise ValueError("test.pt is missing required OGB positive columns")
+    head, relation, tail = (_as_array(raw[name]) for name in ("head", "relation", "tail"))
+    n_rows = head.size
+    if not n_rows:
+        raise ValueError("test.head: expected at least one row")
+    head_type = _type_ids("test.head_type", raw["head_type"], n_rows)
+    tail_type = _type_ids("test.tail_type", raw["tail_type"], n_rows)
+    _integer("test.head", head, (n_rows,), 0, TYPE_SIZES[head_type])
+    _integer("test.tail", tail, (n_rows,), 0, TYPE_SIZES[tail_type])
+    _integer("test.relation", relation, (n_rows,), 0, N_RELATIONS)
+    return np.unique(triple_keys(head.astype(np.int64) + TYPE_OFFSETS[head_type], relation,
+                                tail.astype(np.int64) + TYPE_OFFSETS[tail_type]))
+
+
+def _validate_mask_keys(keys, n_keys: int) -> None:
+    if (not isinstance(keys, np.ndarray) or keys.dtype != np.uint64 or n_keys < 1
+            or keys.shape != (n_keys,) or keys[-1] >= N_ENTITIES * N_RELATIONS * N_ENTITIES
+            or np.any(keys[1:] <= keys[:-1])):
+        raise ValueError("Test mask cache keys must be one-dimensional, sorted unique uint64 keys in range")
 
 
 def triple_keys(heads, relations, tails, n_entities: int = N_ENTITIES, n_relations: int = N_RELATIONS) -> np.ndarray:

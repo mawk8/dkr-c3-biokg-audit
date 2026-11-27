@@ -158,7 +158,8 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                         output_dir: Path | None = None, model_name: str = 'scorer',
                         training_seed: int | None = None, batch_size: int = 64,
                         candidate_chunk: int = 128, save_queries: bool = True,
-                        verbose: bool = True, candidate_sets: dict | None = None) -> dict:
+                        verbose: bool = True, candidate_sets: dict | None = None,
+                        query_mask: np.ndarray | None = None) -> dict:
     """Two queries per selected valid row, all 500 official negatives each.
 
     score_candidates never receives the positive target or diagnostic labels.
@@ -175,6 +176,10 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
         raise ValueError('Need nonempty unique validation row IDs')
     if rows.min() < 0 or rows.max() >= len(split['head']):
         raise ValueError('Validation row ID out of range')
+    if query_mask is not None:
+        query_mask = np.asarray(query_mask)
+        if query_mask.shape != (2, len(rows)) or query_mask.dtype != np.bool_ or not query_mask.any():
+            raise ValueError('Need a nonempty boolean [2, N] query mask aligned to validation rows')
     if candidate_sets is None:
         if split['head_neg'].shape[1] != 500 or split['tail_neg'].shape[1] != 500:
             raise ValueError('Official evaluation requires 500 negatives per side')
@@ -211,9 +216,13 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
             batches = tqdm(range(0, len(rows), batch_size), disable=not verbose, leave=False, unit="batch",
                            desc=f"{model_name} [{protocol}] {'head' if direction == 0 else 'tail'} queries")
             for begin in batches:
-                selected = rows[begin:begin+batch_size]
-                negatives_all = np.asarray(negative_source[negative_key](selected, slice(begin, begin+len(selected))),
-                                           dtype=np.int64)
+                positions = np.arange(begin, min(begin+batch_size, len(rows)))
+                if query_mask is not None:
+                    positions = positions[query_mask[direction, positions]]
+                if not len(positions):
+                    continue
+                selected = rows[positions]
+                negatives_all = np.asarray(negative_source[negative_key](selected, positions), dtype=np.int64)
                 relation = np.asarray(split['relation'][selected], dtype=np.int64)
                 head = np.asarray(split['head'][selected], dtype=np.int64)
                 tail = np.asarray(split['tail'][selected], dtype=np.int64)
@@ -222,9 +231,10 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
                 types = np.asarray(split[target_key+'_type'][selected], dtype=np.int64)
                 query = {'split': 'valid', 'row_id': selected, 'direction': direction,
                          'relation': relation, 'fixed': fixed, 'target_type': types}
-                positive = np.asarray(scorer.score_candidates(query, targets[:, None]))[:, 0]
-                if not np.isfinite(positive).all():
-                    raise ValueError('Non-finite positive score')
+                positive_scores = np.asarray(scorer.score_candidates(query, targets[:, None]))
+                if positive_scores.shape != (len(selected), 1) or not np.isfinite(positive_scores).all():
+                    raise ValueError('Invalid positive score array')
+                positive = positive_scores[:, 0]
                 target_counts = np.asarray(stats['counts'][relation, direction, targets])
                 negative_counts = np.asarray(stats['counts'][relation[:, None], direction, negatives_all])
                 balance = (negative_counts >= target_counts[:, None]).mean(axis=1)
@@ -288,7 +298,8 @@ def evaluate_validation(scorer, data: dict, stats: dict, rows: np.ndarray,
     overall = aggregates['all'].record('all')
     relation_means = [x['mrr'] for x in records if x['stratum'].startswith('relation:')]
     result = dict(stage='preliminary_validation', split='valid', model=model_name, protocol=protocol,
-                  training_seed=training_seed, n_triples=len(rows), n_queries=2*len(rows),
+                  training_seed=training_seed, n_triples=len(rows) if query_mask is None else
+                  int(query_mask.any(axis=0).sum()), n_queries=overall['n_queries'],
                   mrr=overall['mrr'], hits1=overall['hits1'], hits3=overall['hits3'],
                   hits10=overall['hits10'], macro_relation_role_mrr=float(np.mean(relation_means)),
                   n_relation_role_cells=len(relation_means),

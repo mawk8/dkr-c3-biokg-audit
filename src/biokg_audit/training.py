@@ -19,6 +19,7 @@ import math
 from pathlib import Path
 import platform
 import random
+import re
 import time
 from typing import Any, Callable, Mapping
 
@@ -27,6 +28,8 @@ import torch
 from tqdm.auto import tqdm
 from torch import nn
 from torch.nn import functional as F
+
+from .data import _sha256
 
 
 def _canonical(value: Any) -> str:
@@ -367,12 +370,67 @@ _SCORING_METADATA = ("step", "kind", "model_config", "best_mrr", "created_at_utc
                      "source_sha256", "environment")
 
 
+def selected_validation_record(history: list, steps: int, validation_every: int) -> dict:
+    """Select the earliest maximum from a complete official-validation history."""
+    if type(steps) is not int or steps <= 0 or type(validation_every) is not int or validation_every <= 0:
+        raise ValueError("Invalid configured validation schedule")
+    schedule = [*range(validation_every, steps, validation_every), steps]
+    if (not isinstance(history, list) or len(history) != len(schedule) or
+            any(not isinstance(record, dict) or type(record.get("step")) is not int or
+                record["step"] != step for record, step in zip(history, schedule))):
+        raise ValueError("Official validation history must cover the configured schedule")
+    hashes = ("validation_rows_sha256", "candidate_sha256")
+    for record in history:
+        if (record.get("split") != "valid" or record.get("protocol") != "official" or
+                any(not isinstance(record.get(key), str) or
+                    re.fullmatch(r"[0-9a-f]{64}", record[key]) is None or
+                    record[key] != history[0][key] for key in hashes)):
+            raise ValueError("Official validation provenance must match across all selection steps")
+        mrr = record.get("mrr")
+        if type(mrr) not in (int, float) or not 0 <= mrr <= 1:
+            raise ValueError("Official validation MRR must be finite and in [0,1]")
+    return max(history, key=lambda record: record["mrr"])
+
+
+def _completed_run_evidence(best: dict, last_path: Path) -> dict:
+    last = _read_checkpoint(last_path)
+    if (last.get("format_version") != 1 or best.get("kind") != "best" or last.get("kind") != "last" or
+            best.get("validation_enabled") is not True or last.get("validation_enabled") is not True):
+        raise ValueError("Completion evidence requires trusted best and last validation checkpoints")
+    for key in ("run_dir", "best_checkpoint", "model_config", "data_identity", "environment",
+                "scoring_identity", "source_sha256", "scientific_config_sha256"):
+        if best.get(key) != last.get(key):
+            raise ValueError(f"Best and last checkpoint mismatch: {key}")
+    # The wall-time cap and logging cadence may vary across strict resumes.
+    for checkpoint in (best, last):
+        config = TrainConfig(**checkpoint["config"])
+        config.validate()
+        if (_sha(config.scientific()) != checkpoint["scientific_config_sha256"] or
+                _sha(checkpoint["config"]) != checkpoint["config_sha256"]):
+            raise ValueError("Invalid training checkpoint config fingerprint")
+    if last.get("step") != config.steps:
+        raise ValueError("Last checkpoint does not reach the completed training horizon")
+    history = last["validation_history"]
+    selected = selected_validation_record(history, config.steps, config.validation_every)
+    if (best.get("step") != selected["step"] or best.get("best_mrr") != selected["mrr"] or
+            last.get("best_mrr") != selected["mrr"]):
+        raise ValueError("Best checkpoint must be the earliest official validation MRR maximum")
+    prefix = history[:history.index(selected) + 1]
+    if best.get("validation_history") != prefix:
+        raise ValueError("Best checkpoint validation provenance must match the completed run prefix")
+    return {"completed_steps": config.steps, "selected_step": selected["step"],
+            "last_checkpoint_sha256": _sha256(last_path), "validation_history": history}
+
+
 def export_scoring_checkpoint(checkpoint_path: str | Path, output_path: str | Path,
-                              data: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                              data: Mapping[str, Any] | None = None, *,
+                              completed_checkpoint_path: str | Path | None = None) -> dict[str, Any]:
     """Convert a trusted project training checkpoint to a portable scoring file.
 
     For an older checkpoint, supply its original mapping and manifest for
     portability across cache rebuilds. Without them it retains strict identity.
+    Supply the trusted last checkpoint to attest a best snapshot's selection
+    over the complete official-validation schedule for its run.
     """
     checkpoint = _read_checkpoint(Path(checkpoint_path))
     if checkpoint["format_version"] != 1:
@@ -385,6 +443,8 @@ def export_scoring_checkpoint(checkpoint_path: str | Path, output_path: str | Pa
     metadata = {key: checkpoint[key] for key in _SCORING_METADATA}
     metadata["scoring_identity"] = scoring_identity
     metadata["validation_history"] = checkpoint.get("validation_history", [])
+    if completed_checkpoint_path is not None:
+        metadata["completed_run"] = _completed_run_evidence(checkpoint, Path(completed_checkpoint_path))
     # Normalize incidental version subclasses to JSON primitives for weights_only.
     metadata = json.loads(_canonical(metadata))
     with Path(output_path).open("xb") as handle:

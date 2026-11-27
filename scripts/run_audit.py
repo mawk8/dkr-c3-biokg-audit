@@ -206,6 +206,7 @@ def main(argv=None):
         "preset": a.preset, "n_valid_triples": int(len(rows)), "n_queries": int(2 * len(rows)),
         "row_seed": a.row_seed, "neg_seed": a.neg_seed, "n_boot": a.n_boot,
         "matchable_threshold": MATCHABLE_THRESHOLD, "test_positive_mask": test_positive_mask,
+        "test_positive_mask_provenance": data.get("test_positive_mask_provenance") if test_positive_mask else None,
         "checkpoints": checkpoints,
         "negative_diagnostics": diagnostics, "metric_gates": gates,
         "candidate_sha256": {f"{s['protocol']}/{s['model']}": s["candidate_sha256"] for s in summaries},
